@@ -1,0 +1,21 @@
+# Paramètres de l'analyse automatique des rapports des Contrôleurs Budgétaires
+# (modifiables sans toucher au code).
+
+[delais]
+# Date limite de transmission du rapport à la DCB (format jj/mm).
+# Rapport d'étape (au 30 juin) : date limite dans la même année.
+# Rapport annuel (exercice N) : date limite dans l'année N+1.
+# >>> À CONFIRMER/AJUSTER selon les instructions de la DCB en vigueur. <<<
+# (Pour 2023, la note n°0580 du 26/07/2023 fixait exceptionnellement le 04/08.)
+rapport_etape_date_limite = "31/07"
+rapport_annuel_date_limite = "30/04"
+
+[appreciation]
+# Seuils (en %) de la mention attribuée au taux de conformité de la forme et au taux de fiabilité/cohérence.
+tres_bien = 90
+bien = 75
+passable = 50
+# Proposition « retour au CB pour correction » si la conformité de forme est inférieure à ce seuil…
+retour_cb_si_score_forme_inferieur_a = 75
+# … ou si le nombre d'anomalies majeures atteint ce nombre.
+retour_cb_si_anomalies_majeures = 3
