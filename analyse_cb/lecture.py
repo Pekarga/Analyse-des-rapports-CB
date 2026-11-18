@@ -47,14 +47,17 @@ class Bloc:
         t = self.texte.strip()
         if not t or len(t) > 140:
             return False
+        if re.search(r"[;,]\s*$", t):
+            return False  # élément d'énumération (ex. plan annoncé dans l'introduction : « II-Analyse … ; »)
         if self.niveau_titre is not None or normaliser(self.style) in ("title", "titre"):
             return True
         if self.gras and len(t) <= 120:
             return True
         # Numérotation : I. / II.1- / 1. / A) / X-1-
-        if re.match(r"^\s*([IVX]{1,5}|\d{1,2}|[A-H])\s*([.\-)]|\.\d)", t) and len(t) <= 120:
+        # (l'OCR lit souvent « II » comme « Il », « I1 » ou « 11 », et les chiffres romains en minuscules « iv-1 »)
+        if re.match(r"^\s*([IVXLivxl1]{1,5}|\d{1,2}|[A-H])\s*([.\-)]|\.\d)", t) and len(t) <= 120:
             return True
-        if t.isupper() and 3 < len(t) <= 100:
+        if t.isupper() and 3 < len(t) <= 100 and sum(c.isalpha() for c in t) >= 4:
             return True
         return False
 
@@ -66,6 +69,7 @@ class DocumentRapport:
     avertissements: list[str] = field(default_factory=list)
     nb_pages: int | None = None
     images_derniere_page: int = 0  # indice de présence de signature/cachet (PDF)
+    ocr: bool = False  # texte obtenu par reconnaissance optique (document scanné)
 
     @property
     def paragraphes(self) -> list[Bloc]:
@@ -206,14 +210,45 @@ def _lire_pdf(chemin: Path) -> DocumentRapport:
                     t, gras, taille, largeur = contenu
                     blocs.append(Bloc(len(blocs), "p", t, f"taille {taille:.0f}", gras, page=num, largeur=largeur))
 
-    if sum(len(b.texte) for b in blocs) < 300 * max(1, nb_pages) * 0.2:
+    ocr = False
+    if sum(len(b.texte) for b in blocs) < 60 * max(1, nb_pages):
+        # PDF scanné (image) : reconnaissance optique des caractères.
+        from .ocr import OCRIndisponible, ocr_pdf
+
+        try:
+            pages = ocr_pdf(chemin, progression=_PROGRESSION_OCR)
+        except OCRIndisponible as exc:
+            raise DocumentIllisible(
+                f"{chemin.name} est un PDF scanné (image, sans texte) et l'OCR n'est pas disponible : {exc}. "
+                "À défaut, demandez la version Word du rapport.") from None
+        ocr = True
+        blocs = []
+        for num, elements in enumerate(pages, start=1):
+            for e in elements:
+                if e["type"] == "tableau":
+                    blocs.append(Bloc(len(blocs), "tableau", page=num, lignes=e["lignes"]))
+                elif not re.fullmatch(r"(page\s*)?\d+(\s*(sur|/)\s*\d+)?", e["texte"].strip(), re.I):
+                    blocs.append(Bloc(len(blocs), "p", e["texte"], f"ocr {e.get('hauteur', 0)}", False, page=num,
+                                      largeur=e.get("largeur", 0.0)))
         avertissements.append(
-            "Le PDF contient très peu de texte : il s'agit probablement d'un document scanné. "
-            "Demandez la version Word du rapport ou passez-le dans un logiciel d'OCR avant l'analyse.")
-    doc = DocumentRapport(chemin, blocs, avertissements, nb_pages)
+            "Rapport scanné : le texte et les tableaux ont été lus par reconnaissance optique (OCR). Les anomalies "
+            "chiffrées sont à confirmer sur le document original (erreur de lecture possible).")
+    doc = DocumentRapport(chemin, blocs, avertissements, nb_pages, ocr=ocr)
     doc.images_derniere_page = images_derniere
     _fusionner_lignes_pdf(doc)
     return doc
+
+
+class DocumentIllisible(ValueError):
+    pass
+
+
+def _PROGRESSION_OCR(page: int, total: int) -> None:  # remplacée par l'interface (barre de progression)
+    if RAPPEL_PROGRESSION is not None:
+        RAPPEL_PROGRESSION(page, total)
+
+
+RAPPEL_PROGRESSION = None
 
 
 def _fusionner_lignes_pdf(doc: DocumentRapport) -> None:
@@ -257,6 +292,10 @@ def _marquer_sommaire(doc: DocumentRapport) -> None:
             b.sommaire = True
         elif re.search(r"(\.{4,}|…{2,}|_{4,})\s*\d{1,3}\s*$", b.texte):
             b.sommaire = True
+        elif ((re.search(r"[.…_]{2,}[.…_,/ ]{4,}", b.texte) or re.search(r"[.…_]{3,}\s*\S{0,4}\s*$", b.texte))
+              and len(b.texte) < 200
+              and (b.page is None or b.page <= 5)):  # points de conduite lus par OCR
+            b.sommaire = True
         elif re.search(r"\t\s*\d{1,3}\s*$", b.texte) and len(b.texte) < 150:
             b.sommaire = True
         if n in ("table des matieres", "sommaire", "liste des tableaux", "liste des sigles et abreviations"):
@@ -264,14 +303,15 @@ def _marquer_sommaire(doc: DocumentRapport) -> None:
             # Zone de sommaire : lignes suivantes terminées par un numéro de page.
             sans_numero = 0
             for suivant in paragraphes[i + 1:i + 80]:
-                if re.search(r"\s\d{1,3}\s*$", suivant.texte) and len(suivant.texte) < 160:
+                if (re.search(r"(\s|[.…_])\d{1,3}\s*$", suivant.texte)
+                        or re.search(r"[.…_]{3,}\s*\S{0,4}\s*$", suivant.texte)) and len(suivant.texte) < 160:
                     suivant.sommaire = True
                     sans_numero = 0
                 elif suivant.sommaire:
                     continue
                 else:
                     sans_numero += 1
-                    if sans_numero >= 2:
+                    if sans_numero >= 3:
                         break
 
 

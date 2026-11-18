@@ -42,6 +42,7 @@ def lire_nombre(valeur, taux: bool = False) -> float | None:
         return float(valeur)
     s = str(valeur).translate(_APOSTROPHES).strip()
     s = s.replace("FCFA", "").replace("F CFA", "").replace("XOF", "").strip()
+    s = re.sub(r"\s+([,.%])", r"\1", s).rstrip(".;:")  # « 27 ,30% », « 43,9%. » (lecture OCR)
     if not s or not _RE_NOMBRE.match(s):
         return None
     negatif = s.startswith("(") and s.endswith(")") or s.lstrip("(").startswith("-")

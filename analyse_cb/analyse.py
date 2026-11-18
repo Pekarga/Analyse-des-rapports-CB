@@ -19,6 +19,14 @@ RACINE = Path(__file__).resolve().parent.parent
 PARAMETRES_DEFAUT = RACINE / "config" / "parametres.toml"
 REFERENTIEL_DEFAUT = RACINE / "config" / "referentiel_epn.csv"
 
+NOTE_OCR = " [Lecture OCR d'un document scanné : à confirmer sur l'original.]"
+
+
+def _court(c, n: int = 230) -> str:
+    m = c.message.replace(NOTE_OCR, "").replace(" (même écart sur plusieurs colonnes)", "")
+    return m if len(m) <= n else m[: n - 1] + "…"
+
+
 CONFORME, NON_CONFORME, A_VERIFIER, NON_APPLICABLE = "Conforme", "Non conforme", "À vérifier", "Non applicable"
 FIABLE, NON_FIABLE = "Fiable", "Non fiable"
 COHERENT, INCOHERENT = "Cohérent", "Incohérent"
@@ -149,9 +157,14 @@ def analyser(chemin: str | Path, infos: InfosRapport | None = None, parametres: 
     structure = AnalyseStructure(doc)
     tableaux = ControleTableaux(doc)
     transverses = ControlesTransverses(doc, structure, tableaux, periode, fiche)
+    if doc.ocr:
+        for c in tableaux.constats + transverses.constats:
+            if c.nature in ("fiabilite", "coherence") and "[OCR]" not in c.message:
+                c.message += NOTE_OCR
     res = ResultatAnalyse(doc, infos, periode, date_limite(periode, parametres), structure, tableaux, transverses,
                           parametres=parametres)
-    res.signature = controle_signature(doc)
+    annexes = structure["annexes"]
+    res.signature = controle_signature(doc, annexes.debut if annexes.trouvee else None)
     res.difficultes = extraire_difficultes_suggestions(doc, structure)
     _evaluer_canevas(res)
     _evaluer_forme(res)
@@ -184,13 +197,23 @@ def _evaluer_forme(res: ResultatAnalyse) -> None:
     lignes: list[LigneForme] = []
     for rub in RUBRIQUES:
         det = s[rub.code]
-        if rub.annuel_seulement and not annuel:
+        if rub.code == "annexes":
+            statut = CONFORME if det.trouvee else NON_APPLICABLE
+            precision = "Annexes jointes au rapport." if det.trouvee else "Pas d'annexes."
+            lignes.append(LigneForme(rub.code, rub.libelle, None, statut, precision, True))
+            continue
+        if rub.annuel_seulement and not annuel and not det.trouvee:
             statut, precision = NON_APPLICABLE, "Rubrique exigée uniquement dans le rapport annuel."
+        elif det.mode == "titre" and det.nb_mots == 0 and not rub.cas_echeant:
+            statut = A_VERIFIER if (rub.annuel_seulement and not annuel) else NON_CONFORME
+            precision = f"Titre présent (« {det.titre.strip()[:80]} ») mais rubrique non renseignée."
         elif det.mode == "titre":
             statut = CONFORME
             precision = f"Titre trouvé : « {det.titre.strip()[:90]} »."
             if det.nb_mots < rub.mots_min:
                 precision += f" Rubrique peu développée ({det.nb_mots} mots)."
+            if rub.annuel_seulement and not annuel:
+                precision += " (Rubrique facultative hors rapport annuel.)"
         elif det.mode == "texte":
             statut = CONFORME if not rub.titre_requis else A_VERIFIER
             precision = ("Élément traité dans le texte" + ("" if not rub.titre_requis else " sans titre dédié")
@@ -201,6 +224,11 @@ def _evaluer_forme(res: ResultatAnalyse) -> None:
             statut, precision = NON_CONFORME, "Rubrique absente du rapport."
         manquantes = [e.libelle for e in enfants(rub.code)
                       if not s[e.code].trouvee and not e.cas_echeant and not (e.annuel_seulement and not annuel)]
+        vides = [e.libelle for e in enfants(rub.code)
+                 if s[e.code].mode == "titre" and s[e.code].nb_mots == 0 and not e.cas_echeant]
+        if vides and statut == CONFORME:
+            precision += " Sous-parties non renseignées : " + "; ".join(vides) + "."
+            statut = A_VERIFIER
         if manquantes and statut != NON_APPLICABLE:
             precision += " Sous-parties manquantes : " + "; ".join(manquantes) + "."
             if statut == CONFORME and rub.code != "introduction":
@@ -299,9 +327,14 @@ def _evaluer_fond(res: ResultatAnalyse) -> None:
             continue
         det = s[rub.code]
         extrait = f" Extrait : « {det.extrait[:160]} »" if det.trouvee and det.texte else ""
-        if rub.annuel_seulement and not annuel:
+        if rub.annuel_seulement and not annuel and not det.trouvee:
             lignes.append(LigneFond(rub.code, rub.libelle, rub.ligne_fond, SANS_OBJET, SANS_OBJET,
                                     "Rubrique propre au rapport annuel."))
+            continue
+        if det.mode == "titre" and det.nb_mots == 0:
+            v = A_APPRECIER if rub.cas_echeant or (rub.annuel_seulement and not annuel) else NON_RENSEIGNE
+            lignes.append(LigneFond(rub.code, rub.libelle, rub.ligne_fond, v, v,
+                                    "Titre présent mais aucun contenu : fond non appréciable."))
             continue
         if not det.trouvee:
             com = ("Non mentionné (le cas échéant)." if rub.cas_echeant else "Rubrique absente : fond non appréciable.")
@@ -319,11 +352,12 @@ def _evaluer_fond(res: ResultatAnalyse) -> None:
             else:
                 fiab = FIABLE if ok_f else NON_FIABLE
                 com = ("Calculs des tableaux vérifiés sans anomalie." if ok_f else
-                       f"{len(cs_f)} anomalie(s) de calcul : " + " | ".join(c.message for c in cs_f[:4]))
+                       f"{len(cs_f)} anomalie(s) de calcul : " + " | ".join(_court(c) for c in cs_f[:3])
+                       + (" | …" if len(cs_f) > 3 else ""))
             if ok_f is not None or cs_c:
                 coh = COHERENT if not cs_c else INCOHERENT
                 if cs_c:
-                    com += " Cohérence : " + " | ".join(c.message for c in cs_c[:4])
+                    com += " Cohérence : " + " | ".join(_court(c) for c in cs_c[:3])
                 else:
                     com += " Concordance avec les autres tableaux et le texte vérifiée."
             if det.nb_mots < rub.mots_min:
@@ -334,9 +368,9 @@ def _evaluer_fond(res: ResultatAnalyse) -> None:
                 cs = [c for c in tr.constats if c.rubrique == "resultat_budgetaire"]
                 maj = [c for c in cs if c.gravite == "Majeure"]
                 fiab = FIABLE if r.get("montant_retrouve") else A_APPRECIER
-                coh = INCOHERENT if maj else (COHERENT if r.get("sens_cite") else A_APPRECIER)
+                coh = INCOHERENT if maj else (COHERENT if r.get("sens_cite") or r.get("montant_retrouve") else A_APPRECIER)
                 com = (f"Résultat recalculé (recouvrements − ordonnancements) : {r['resultat']:,.0f} ({r['sens']}).".replace(",", " ")
-                       + (" " + " | ".join(c.message for c in cs) if cs else ""))
+                       + (" " + " | ".join(_court(c) for c in cs) if cs else ""))
             else:
                 com = "Tableaux d'exécution (T5/T6) absents ou incomplets : résultat non recalculable." + extrait
         elif rub.code == "ratios":
@@ -358,6 +392,8 @@ def _evaluer_fond(res: ResultatAnalyse) -> None:
                        "Texte de création non conforme au référentiel des EPN.") + extrait
         elif det.nb_mots < rub.mots_min:
             com = f"Rubrique présente mais très peu développée ({det.nb_mots} mots).{extrait}"
+        if res.doc.ocr and (fiab in (NON_FIABLE,) or coh in (INCOHERENT,)):
+            com += " (Document scanné lu par OCR : confirmer les chiffres sur l'original. Détail : onglet « Contrôles automatiques ».)"
         lignes.append(LigneFond(rub.code, rub.libelle, rub.ligne_fond, fiab, coh, com))
 
     # Lignes de regroupement (Introduction, Présentation du budget, …) : synthèse des sous-rubriques

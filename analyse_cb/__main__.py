@@ -54,6 +54,13 @@ def main(argv: list[str] | None = None) -> int:
         print("Aucun rapport à analyser.", file=sys.stderr)
         return 1
 
+    from . import lecture
+
+    def progression(page, total):
+        print(f"\r   lecture OCR (document scanné) : page {page}/{total}", end="" if page < total else "\n",
+              file=sys.stderr, flush=True)
+
+    lecture.RAPPEL_PROGRESSION = progression
     parametres = charger_parametres(a.parametres)
     registre = _registre(a.registre)
     sortie = Path(a.sortie)

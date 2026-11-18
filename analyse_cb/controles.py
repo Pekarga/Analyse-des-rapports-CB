@@ -46,13 +46,17 @@ def lire_date(texte) -> date | None:
 # ------------------------------------------------------------------ période
 @dataclass
 class Periode:
-    type: str  # "etape" (semestriel, au 30 juin) ou "annuel"
+    type: str  # "etape" (au 30 juin : 1er semestre ou 2e trimestre), "trimestriel" (T1, T3, T4) ou "annuel"
     annee: int
     libelle: str
     detectee: bool = True
+    trimestre: int | None = None
 
     @property
     def fin(self) -> date:
+        if self.type == "trimestriel" and self.trimestre:
+            return {1: date(self.annee, 3, 31), 3: date(self.annee, 9, 30), 4: date(self.annee, 12, 31)}.get(
+                self.trimestre, date(self.annee, 6, 30))
         return date(self.annee, 6, 30) if self.type == "etape" else date(self.annee, 12, 31)
 
     @property
@@ -60,16 +64,35 @@ class Periode:
         return self.type == "annuel"
 
 
+_ORDINAUX = {"1er": 1, "premier": 1, "1e": 1, "1ere": 1, "1": 1, "deuxieme": 2, "2e": 2, "2eme": 2, "second": 2,
+             "2": 2, "troisieme": 3, "3e": 3, "3eme": 3, "3": 3, "quatrieme": 4, "4e": 4, "4eme": 4, "4": 4}
+_RE_TRIMESTRE = re.compile(r"\b(" + "|".join(sorted(_ORDINAUX, key=len, reverse=True)) + r")\s+trimestre\s+"
+                           r"(?:de l.(?:annee|exercice)\s+|de la gestion\s+|budgetaire\s+)?((?:19|20)\d\d)")
+
+
+def _periode_trimestre(t: int, an: int) -> Periode:
+    if t == 2:
+        return Periode("etape", an, f"Rapport du 2e trimestre {an} (rapport d'étape au 30 juin)", trimestre=2)
+    nom = {1: "1er", 3: "3e", 4: "4e"}[t]
+    return Periode("trimestriel", an, f"Rapport du {nom} trimestre {an}", trimestre=t)
+
+
 def detecter_periode(doc: DocumentRapport, imposee: str | None = None) -> Periode:
     if imposee:
         n = normaliser(imposee)
         annee = re.search(r"(19|20)\d\d", n)
         an = int(annee.group(0)) if annee else date.today().year
+        m = _RE_TRIMESTRE.search(n) or re.search(r"\bt([1-4])\b", n)
+        if m:
+            return _periode_trimestre(_ORDINAUX.get(m.group(1), 0) or int(m.group(1)), an)
         etape = bool(re.search(r"semestr|etape|juin|s1\b|30/06", n)) and not re.search(r"(2e|2eme|deuxieme|second) semestre", n)
         return Periode("etape" if etape else "annuel", an,
                        f"Rapport d'étape au 30 juin {an}" if etape else f"Rapport annuel, exercice {an}")
     debut = normaliser(doc.texte(0, min(len(doc.blocs), 40)))
     for zone in (debut, normaliser(doc.texte_complet)[:20000]):
+        m = _RE_TRIMESTRE.search(zone)
+        if m:
+            return _periode_trimestre(_ORDINAUX[m.group(1)], int(m.group(2)))
         m = re.search(r"(1er|premier|1e|1ere|1)\s+semestre\s+(?:de l.(?:annee|exercice)\s+|de la gestion\s+|budgetaire\s+)?((?:19|20)\d\d)", zone) \
             or re.search(r"(?:au|arrete au|a fin|fin|au titre du)\s+(?:30 juin|30/06/|30-06-)\s*((?:19|20)\d\d)", zone) \
             or re.search(r"rapport d.etape[^.]{0,60}?((?:19|20)\d\d)", zone)
@@ -88,6 +111,9 @@ def detecter_periode(doc: DocumentRapport, imposee: str | None = None) -> Period
 
 def date_limite(periode: Periode, parametres: dict) -> date:
     d = parametres.get("delais", {})
+    if periode.type == "trimestriel":
+        from datetime import timedelta
+        return periode.fin + timedelta(days=int(d.get("rapport_trimestriel_delai_jours", 30)))
     if periode.type == "etape":
         jj, mm = (int(x) for x in d.get("rapport_etape_date_limite", "31/07").split("/"))
         return date(periode.annee, mm, jj)
@@ -140,14 +166,43 @@ def identifier_epn(doc: DocumentRapport, referentiel: list[FicheEPN]) -> tuple[s
             return fiche.denomination or fiche.sigle, fiche
     generiques = re.compile(r"ministere|republique|union|direction|rapport|controleur|semestre|exercice|"
                             r"^epn$|logo|table des|sommaire|budget|^\W*$|^(de|du|la|le)\b")
-    for b in doc.paragraphes[:25]:
+    motif_epn = re.compile(r"\b(office|agence|institut|ecole|centre|fonds|universite|caisse|conseil|autorite|"
+                           r"etablissement|societe|laboratoire|bureau|programme|chu|hopital|chambre|maison|"
+                           r"observatoire|haute autorite|port autonome|theatre|bibliotheque|musee|academie)\b", re.I)
+    page_garde = [b for b in doc.paragraphes[:25] if not b.sommaire and (b.page in (None, 1) or doc.ocr is False)]
+    for b in page_garde:
         n = b.norm
-        if b.sommaire or generiques.search(n) or len(n) < 4 or len(n) > 120:
+        if len(n) < 4:
             continue
-        if re.search(r"(office|agence|institut|ecole|centre|fonds|universite|caisse|conseil|autorite|"
-                     r"etablissement|societe|laboratoire|bureau|programme|chu|hopital|\([A-Z]{2,}\))", b.texte, re.I):
-            return b.texte.strip(), None
+        # Dénomination sur la même ligne que le titre (fréquent après OCR) :
+        # « RAPPORT DU CONTROLEUR BUDGETAIRE DEUXIEME TRIMESTRE 2026 CHAMBRE NATIONALE D'AGRICULTURE (CNACI) »
+        m = motif_epn.search(b.texte)
+        if m and (not generiques.search(n) or "rapport" in n):
+            nom = b.texte[m.start():].strip()
+            nom = re.split(r"\s+(?:pr[ée]sent[ée] par|semestre|exercice|trimestre)\b", nom, flags=re.I)[0]
+            m2 = re.match(r"(.{4,100}?\([A-Z0-9\-]{2,12}\))", nom)
+            nom = (m2.group(1) if m2 else nom[:100]).strip(" .:-")
+            if len(nom) >= 6:
+                return _casse_titre(nom), None
     return doc.chemin.stem, None
+
+
+def _casse_titre(nom: str) -> str:
+    """« CHAMBRE NATIONALE D'AGRICULTURE (CNACI) » → « Chambre Nationale d'Agriculture (CNACI) »."""
+    if not nom.isupper():
+        return nom
+    mots = []
+    for m in re.split(r"(\s+)", nom.replace("’", "'")):
+        if re.fullmatch(r"\([A-Z0-9\-]+\)", m) or not m.strip():
+            mots.append(m)
+        elif m.lower() in ("de", "du", "des", "la", "le", "les", "et", "pour", "en"):
+            mots.append(m.lower())
+        elif re.match(r"^[DL]'", m):
+            mots.append(m[0].lower() + "'" + m[2:].capitalize())
+        else:
+            mots.append(m.capitalize())
+    t = "".join(mots)
+    return t[0].upper() + t[1:]
 
 
 def identifier_controleur(doc: DocumentRapport) -> str:
@@ -167,17 +222,31 @@ def identifier_controleur(doc: DocumentRapport) -> str:
 
 
 # ------------------------------------------------------------------ signature
-def controle_signature(doc: DocumentRapport) -> tuple[str, str, date | None]:
-    fin = doc.paragraphes[-30:]
+def controle_signature(doc: DocumentRapport, fin_corps: int | None = None) -> tuple[str, str, date | None]:
+    """Date et signataire en fin de rapport (avant les annexes) ou visa sur la page de garde."""
+    corps = [b for b in doc.paragraphes if fin_corps is None or b.index < fin_corps]
+    fin = corps[-30:]
     texte_fin = "\n".join(b.texte for b in fin)
     nf = normaliser(texte_fin)
     date_rapport = None
-    for m in re.finditer(r"(?:fait\s+a\s+\w+|abidjan|yamoussoukro|bouake|[a-z]+)\s*,?\s*le\s+([^\n]{6,30})", nf):
+    villes = r"abidjan|yamoussoukro|bouake|korhogo|daloa|san[- ]pedro|man|gagnoa|abengourou|divo|soubre|odienne|bondoukou"
+    for m in re.finditer(rf"(?:fait\s+a\s+[\w -]+?|^\s*(?:{villes}))\s*,?\s*le\s+([^\n]{{6,30}})", nf, re.M):
         date_rapport = lire_date(m.group(1))
         if date_rapport:
             break
     signataire = identifier_controleur(doc) if re.search(r"controleu[rs]e? budgetaire", nf) else ""
     images = doc.images_derniere_page
+    if doc.ocr:
+        garde = normaliser(" ".join(b.texte for b in doc.paragraphes if b.page == 1))
+        visa = bool(re.search(r"\bvisa\b|present[ée]? par|controleur budgetaire", garde))
+        if date_rapport is None:
+            m = RE_DATE_CHIFFRES.search(garde) or RE_DATE_LETTRES.search(garde)
+            date_rapport = lire_date(m.group(0)) if m else None
+        lieu = "en fin de rapport" if signataire else ("sur la page de garde (visa/présentation)" if visa else "")
+        return ("À vérifier",
+                "Document scanné : signature, cachet et date à vérifier visuellement"
+                + (f" ({lieu})" if lieu else " (aucun bloc de signature repéré)")
+                + (f" ; date lue : {date_rapport:%d/%m/%Y}" if date_rapport else "") + ".", date_rapport)
     if date_rapport and signataire:
         precision = (f"Rapport daté du {date_rapport:%d/%m/%Y}, signataire : {signataire}."
                      + ("" if images else " Aucune image de signature/cachet détectée : vérifier la signature manuscrite."))
@@ -195,6 +264,65 @@ RE_POURCENT = re.compile(r"(\d{1,3}(?:[.,]\d{1,3})?)\s*%")
 
 def _phrases(texte: str) -> list[str]:
     return [p for p in re.split(r"(?<=[.;!?])\s+|\n", texte) if p.strip()]
+
+
+def ratios_cites(texte: str, motif: str, fenetre: int = 180) -> list[tuple[float, str, float]]:
+    """Valeurs citées après la mention d'un ratio : « 45,2 % » ou fraction « = 0,68 ».
+
+    Renvoie (valeur en %, extrait, tolérance en points).
+    """
+    n = normaliser(texte)
+    res = []
+    for m in re.finditer(motif, n):
+        zone = n[m.start():m.end() + fenetre]
+        suivant = re.search(r"\b(rrp|rdp|rda|rdf|rdi)\b", zone[m.end() - m.start():])
+        if suivant:
+            zone = zone[:m.end() - m.start() + suivant.start()]
+        p = RE_POURCENT.search(zone)
+        f = re.search(r"=\s*(0[.,]\d{1,4}|1(?:[.,]0+)?|0)(?!\d)(?![.,]\d)(?!\s*%)", zone)
+        candidats = []
+        if p:
+            candidats.append((p.start(), lire_nombre(p.group(1), taux=True), 0.6))
+        if f:
+            dec = len(f.group(1).split(",")[-1].split(".")[-1]) if re.search(r"[.,]", f.group(1)) else 0
+            candidats.append((f.start(), lire_nombre(f.group(1), taux=True) * 100, max(0.6, min(10.0, 100 * 10 ** -dec))))
+        if candidats:
+            _, v, tol = min(candidats)
+            if v is not None:
+                res.append((v, re.sub(r"\s+", " ", zone).strip()[:160], tol))
+    return res
+
+
+_NB = r"\d{1,3}(?:[ \u00a0\u202f]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?"
+RE_CALCUL = re.compile(rf"((?:{_NB})(?:\s*[-+–—−/x×*]\s*(?:{_NB}))+)\s*=\s*({_NB})\s*(%?)")
+
+
+def calculs_texte(texte: str) -> list[tuple[str, float, float, float]]:
+    """Calculs écrits dans le texte (« 352 776 576 – 219 352 902 = 133 423 674 ») :
+    renvoie (expression, résultat écrit, résultat exact, tolérance) pour ceux qui sont faux."""
+    erreurs = []
+    for m in RE_CALCUL.finditer(texte):
+        expr, resultat, pct = m.group(1), m.group(2), m.group(3)
+        morceaux = re.split(r"\s*([-+–—−/x×*])\s*", expr)
+        try:
+            nombres = [lire_nombre(x) for x in morceaux[0::2]]
+            if any(v is None for v in nombres):
+                continue
+            ops = [{"–": "-", "—": "-", "−": "-", "x": "*", "×": "*"}.get(o, o) for o in morceaux[1::2]]
+            calc = "".join(f"{v!r}{o}" for v, o in zip(nombres, ops + [""]))
+            exact = eval(calc, {"__builtins__": {}}, {})  # uniquement des nombres et + - * /
+        except (ZeroDivisionError, SyntaxError, TypeError):
+            continue
+        ecrit = lire_nombre(resultat, taux=True)
+        if ecrit is None:
+            continue
+        if pct and abs(exact) <= 1.5 and ecrit > 1.5:
+            exact *= 100
+        dec = len(re.split(r"[.,]", resultat)[-1]) if re.search(r"[.,]\d{1,2}$", resultat) else 0
+        tol = 10 ** -dec if dec else 1.0  # résultat arrondi ou tronqué à la dernière décimale affichée
+        if abs(exact - ecrit) > tol + 1e-9:
+            erreurs.append((m.group(0).strip(), ecrit, exact, tol))
+    return erreurs
 
 
 def pourcentages_cites(texte: str, motif: str) -> list[tuple[float, str]]:
@@ -232,6 +360,20 @@ class ControlesTransverses:
         self._resultat_budgetaire()
         self._ratios()
         self._texte_creation()
+        self._calculs_dans_le_texte()
+
+    def _calculs_dans_le_texte(self) -> None:
+        annexes = self.s["annexes"]
+        fin = annexes.debut if annexes.trouvee else len(self.doc.blocs)
+        for b in self.doc.blocs[:fin]:
+            if b.type != "p" or b.sommaire:
+                continue
+            for expr, ecrit, exact, tol in calculs_texte(b.texte):
+                rub = self.s.section_du_bloc(b.index) or ""
+                self._ajouter(rub, "Calcul exact dans le texte",
+                              f"Calcul inexact : « {expr} » (résultat exact : {format_montant(exact) if abs(exact) >= 100 else round(exact, 4)}).",
+                              "Mineure", "fiabilite", attendu=format_montant(exact) if abs(exact) >= 100 else str(round(exact, 4)),
+                              constate=format_montant(ecrit) if abs(ecrit) >= 100 else str(ecrit))
 
     def _ajouter(self, rubrique, controle, message, gravite="Mineure", nature="coherence", attendu="", constate=""):
         self.constats.append(Constat(rubrique, controle, message, gravite, nature, "", "", attendu, constate))
@@ -335,11 +477,11 @@ class ControlesTransverses:
         }
         for code, (libelle, formule, valeurs, motif) in comp.items():
             ratio = Ratio(code, libelle, formule, {k: v for k, v in valeurs.items() if v is not None})
-            cites = pourcentages_cites(texte, motif) if texte else []
+            cites = ratios_cites(texte, motif) if texte else []
             if cites:
-                ratio.cite, ratio.phrase = cites[0]
+                ratio.cite, ratio.phrase, _ = cites[0]
                 if ratio.calcule:
-                    ratio.coherent = any(abs(c - v) <= 0.6 for c, _ in cites for v in ratio.calcule.values())
+                    ratio.coherent = any(abs(c - v) <= tol for c, _, tol in cites for v in ratio.calcule.values())
                     if not ratio.coherent:
                         self._ajouter("ratios", f"Cohérence du {code}",
                                       f"{libelle} cité : {format_taux(ratio.cite)} ; valeur(s) recalculée(s) à partir "

@@ -15,9 +15,9 @@ Cet outil automatise l'analyse des rapports périodiques des Contrôleurs Budgé
 | Partie de la grille | Contrôles automatiques |
 |---|---|
 | **En-tête** | Repérage de l'EPN (via le référentiel ou la page de garde), du CB signataire et de la période (rapport d'étape au 30 juin ou rapport annuel). Vérification de l'usage du canevas en vigueur : rubriques propres au canevas 2023 et présentation par activités (budget-programmes). |
-| **I. Délai** | Date de fin de période, date limite (paramétrable), écart en jours et appréciation. L'écart et l'appréciation sont des formules Excel : ils se recalculent si vous corrigez une date. |
+| **I. Délai** | Période reconnue (1er semestre, 1er à 4e trimestre, exercice annuel ; le rapport du 2e trimestre est traité comme le rapport d'étape au 30 juin), date de fin de période, date limite (paramétrable), écart en jours et appréciation. L'écart et l'appréciation sont des formules Excel : ils se recalculent si vous corrigez une date. |
 | **II. Forme** | Présence de chaque partie et sous-partie du canevas, y compris les éléments de l'introduction (texte de création, missions, antennes, financement, effectif…). Les rubriques « le cas échéant » sont signalées, et celles qui ne concernent que le rapport annuel sont marquées « Non applicable » dans un rapport d'étape. L'outil vérifie aussi la présence des 8 tableaux (avec titre et source), la cohérence entre le sommaire et les titres, et la présence d'une date et d'un signataire. Les rubriques trop peu développées sont signalées. |
-| **III. Fond** | **Fiabilité** : recalcul de tous les tableaux (montant actuel = initial + modifications, sous-totaux, totaux, taux de réalisation et d'exécution, écarts, variations, taux des motifs de différés et de rejets). **Cohérence** : entre tableaux (T1↔T2, T1↔T3, équilibre T3 = T4, T5↔T3, T6↔T4) et entre le texte et les tableaux (taux cités, sens et montant du résultat budgétaire, ratios RRP, RDP, RDF et RDI recalculés). Le texte de création est comparé au référentiel des EPN. |
+| **III. Fond** | **Fiabilité** : recalcul de tous les tableaux (montant actuel = initial + modifications, sous-totaux, totaux, taux de réalisation et d'exécution, écarts, variations, taux des motifs de différés et de rejets). Les calculs écrits dans le texte sont aussi vérifiés (« 352 776 576 − 219 352 902 = 133 423 674 », SNT, ratios). **Cohérence** : entre tableaux (T1↔T2, T1↔T3, équilibre T3 = T4, T5↔T3, T6↔T4, mêmes activités aux tableaux 4 et 6) et entre le texte et les tableaux (taux cités, sens et montant du résultat budgétaire, ratios RRP, RDP, RDF et RDI recalculés). Le texte de création est comparé au référentiel des EPN. |
 | **IV. Difficultés et suggestions** | Extraction des difficultés et suggestions formulées par le CB, classées dans les 3 catégories de la grille (exécution du budget, contrôle de l'exécution, gestion de l'établissement). |
 | **V. Appréciation générale** | Projet d'appréciation (points forts, insuffisances, recommandations au CB) et proposition de suite à donner (retour au CB ou rapport exploitable). |
 
@@ -32,6 +32,13 @@ Prérequis : Python 3.11 ou plus récent (https://www.python.org, cocher « Add 
 ```bash
 pip install -r requirements.txt
 ```
+
+**Pour les rapports scannés** (cas le plus fréquent : PDF issus d'un scanner), il faut aussi le logiciel de reconnaissance de caractères **Tesseract OCR** avec la langue française :
+
+- Windows : installateur disponible sur https://github.com/UB-Mannheim/tesseract/wiki. Pendant l'installation, cochez la langue **French** (« Additional language data »), puis ajoutez le dossier d'installation (par ex. `C:\Program Files\Tesseract-OCR`) à la variable PATH.
+- Linux : `sudo apt install tesseract-ocr tesseract-ocr-fra`
+
+Sans Tesseract, les rapports Word et les PDF « texte » restent analysés normalement. Un PDF scanné est alors refusé avec un message explicite.
 
 Pour l'interface web (facultatif) :
 
@@ -77,14 +84,15 @@ Autres options : `--epn`, `--controleur`, `--periode "1er semestre 2025"`, `--pa
 
 ## Paramétrage
 
-- **`config/parametres.toml`** : dates limites de transmission (rapport d'étape et rapport annuel), seuils des appréciations et critères de la proposition « retour au CB ». **Les dates limites par défaut (31/07 pour le rapport d'étape, 30/04 de N+1 pour le rapport annuel) sont à confirmer selon les instructions de la DCB.**
+- **`config/parametres.toml`** : dates limites de transmission (rapport d'étape, rapports trimestriels et rapport annuel), seuils des appréciations et critères de la proposition « retour au CB ». **Les dates limites par défaut (31/07 pour le rapport d'étape, 30/04 de N+1 pour le rapport annuel) sont à confirmer selon les instructions de la DCB.**
 - **`config/referentiel_epn.csv`** : une ligne par EPN (sigle, dénomination, décret de création, tutelle, CB en poste). Plus il est complet, meilleure est l'identification des EPN et la vérification du texte de création. La ligne fournie est un exemple fictif à remplacer.
 - **`modeles/Fichier_analyse_des_rapports_des_CB.xlsx`** : le modèle de la DCB. Si vous le modifiez, conservez la position des lignes, ou adaptez `ligne_forme` dans `analyse_cb/canevas.py`.
 - **`analyse_cb/canevas.py`** : le référentiel des rubriques du canevas, avec les expressions qui servent à les reconnaître. C'est ici qu'il faut intervenir si le canevas évolue ou si certains CB intitulent leurs parties autrement.
 
 ## Points d'attention
 
-- **Formats** : les .docx et les PDF « texte » donnent les meilleurs résultats. Un **PDF scanné** (image) ne contient pas de texte exploitable. L'outil le signale : il faut alors demander la version Word du rapport ou passer le PDF dans un logiciel d'OCR. Les fichiers .doc doivent d'abord être enregistrés en .docx.
+- **Rapports scannés** : l'outil le détecte et lit automatiquement le document par OCR. Il redresse les pages (inclinaison, pages à l'italienne), lit les titres en bandeau et reconstitue les tableaux à partir de leur quadrillage. Les montants sont relus cellule par cellule en mode « chiffres uniquement ». Compter environ 1 à 2 minutes pour 30 pages. Le résultat est ensuite mis en cache : une nouvelle analyse du même fichier est immédiate. Les anomalies chiffrées portent la mention « à confirmer sur l'original », car une erreur de lecture reste possible. L'onglet « Tableaux extraits » montre ce qui a été lu. Les tampons et les signatures manuscrites ne sont pas lisibles par l'OCR : la signature, le visa, le nom du CB et la date de réception sont donc à vérifier ou à saisir.
+- **Formats** : .docx et .pdf (texte ou scanné). Les fichiers .doc doivent d'abord être enregistrés en .docx.
 - **Signature** : la présence d'une date et du nom du CB est vérifiée automatiquement. La signature manuscrite et le cachet restent à contrôler visuellement (statut « À vérifier »).
 - **Grille Excel et canevas 2023** : la grille actuelle ne reprend pas certaines rubriques du canevas 2023 (III Analyse de la performance, IV.5 SNT, VIII Gestion des risques, IX Autres points, annonce du plan). L'outil les contrôle quand même et les présente dans l'onglet « Contrôle structure ». Par ailleurs, dans la grille, les lignes « Gouvernance » s'intitulent « Contrôle de gestion / Contrôle de trésorerie » alors que le canevas prévoit « COGES / Organes de supervision » et « Comité de trésorerie » : l'outil les traite au sens du canevas. Les libellés des tableaux 1 et 2 sont aussi inversés par rapport au canevas : chaque tableau est rattaché à la ligne de la grille qui porte le même contenu.
 
@@ -100,6 +108,7 @@ python -m pytest
 ```
 analyse_cb/
   lecture.py     lecture .docx / .pdf → blocs (paragraphes, tableaux, sommaire)
+  ocr.py         lecture des PDF scannés : redressement, bandeaux, quadrillage des tableaux, OCR
   canevas.py     référentiel des rubriques et tableaux du canevas + lignes de la grille Excel
   structure.py   repérage des rubriques, découpage en sections, contrôle du sommaire
   tableaux.py    identification des tableaux 1 à 8, contrôles arithmétiques et de cohérence

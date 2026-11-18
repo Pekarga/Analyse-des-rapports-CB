@@ -158,3 +158,36 @@ def test_pdf_meme_resultat_que_docx(rapports, res_anomalies, tmp_path):
     res_pdf = analyser(tmp_path / "rapport_exemple_anomalies.pdf", InfosRapport(date_reception=date(2099, 8, 12)))
     assert {l.code: l.statut for l in res_pdf.forme} == {l.code: l.statut for l in res_anomalies.forme}
     assert {c.controle for c in res_pdf.constats} == {c.controle for c in res_anomalies.constats}
+
+
+# ------------------------------------------------------------------ rapport scanné (OCR)
+def _scanner(pdf: Path, sortie: Path) -> Path:
+    """Simule un scan : chaque page du PDF devient une image (aucune couche texte)."""
+    import pypdfium2 as pdfium
+
+    doc = pdfium.PdfDocument(str(pdf))
+    images = [doc[i].render(scale=200 / 72, grayscale=True).to_pil().convert("L") for i in range(len(doc))]
+    doc.close()
+    images[0].save(sortie, "PDF", resolution=200, save_all=True, append_images=images[1:])
+    return sortie
+
+
+def _ocr_ok():
+    from analyse_cb.ocr import ocr_disponible
+    return ocr_disponible()[0]
+
+
+@pytest.mark.skipif(not shutil.which("soffice") or not _ocr_ok(), reason="LibreOffice ou Tesseract absent")
+def test_rapport_scanne_ocr(rapports, res_anomalies, tmp_path, monkeypatch):
+    monkeypatch.setenv("ANALYSE_CB_CACHE", str(tmp_path / "cache"))
+    subprocess.run(["soffice", "--headless", "--convert-to", "pdf", "--outdir", str(tmp_path),
+                    str(rapports["anomalies"])], check=True, capture_output=True, timeout=180)
+    scan = _scanner(tmp_path / "rapport_exemple_anomalies.pdf", tmp_path / "scan.pdf")
+    res = analyser(scan, InfosRapport(date_reception=date(2099, 8, 12)))
+    assert res.doc.ocr
+    assert set(res.tableaux.par_code) >= {"T1", "T2", "T3", "T4", "T5", "T6", "T7"}
+    attendus = {c.controle for c in res_anomalies.constats}
+    trouves = {c.controle for c in res.constats}
+    assert attendus <= trouves, attendus - trouves
+    for code in ("ratios", "controle_gestion", "risques", "T8"):
+        assert statut(res, code) == "Non conforme", code

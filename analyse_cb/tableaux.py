@@ -271,6 +271,21 @@ class ControleTableaux:
         for t in self.par_code.values():
             self._controler(t)
         self._coherence()
+        self._dedoublonner()
+
+    def _dedoublonner(self) -> None:
+        """Une même erreur répercutée sur plusieurs colonnes (ex. initial et actuel) n'est signalée qu'une fois."""
+        vus: dict[tuple, Constat] = {}
+        uniques = []
+        for c in self.constats:
+            cle = (c.tableau, c.ligne, c.controle, c.attendu, c.constate)
+            if cle in vus:
+                if "(même écart" not in vus[cle].message:
+                    vus[cle].message += " (même écart sur plusieurs colonnes)"
+                continue
+            vus[cle] = c
+            uniques.append(c)
+        self.constats = uniques
 
     def present(self, code: str) -> bool:
         return code in self.par_code
@@ -330,6 +345,11 @@ class ControleTableaux:
 
     def _verifier_taux(self, tab, l, attendu, controle):
         ok, constate = _comparer_taux(attendu, l.valeurs["taux"], l.brut.get("taux", ""))
+        if not ok and abs(constate) >= 1000:
+            self._ajouter(tab, controle, l.libelle, format_taux(attendu), format_montant(l.valeurs["taux"]),
+                          f"{tab.nom}, ligne « {l.libelle} » : la colonne des taux contient un montant "
+                          f"({format_montant(l.valeurs['taux'])}) au lieu du taux ({format_taux(attendu)}).")
+            return
         if not ok:
             ecart = abs(attendu - constate)
             self._ajouter(tab, controle, l.libelle, format_taux(attendu), format_taux(constate),
@@ -418,11 +438,11 @@ class ControleTableaux:
             vb = p[code_b].total(role_b)
             if va is None or vb is None:
                 return
-            if abs(va - vb) <= max(1.0, 1e-6 * abs(va)):
+            if abs(va - vb) <= 1.0:  # montants en FCFA : l'égalité doit être exacte (à l'arrondi près)
                 return
             for ra, rb in alternatives:
                 xa, xb = p[code_a].total(ra), p[code_b].total(rb)
-                if xa is not None and xb is not None and abs(xa - xb) <= max(1.0, 1e-6 * abs(xa)):
+                if xa is not None and xb is not None and abs(xa - xb) <= 1.0:
                     return
             nom_a, nom_b = p[code_a].nom, p[code_b].nom
             self.constats.append(Constat(
@@ -443,6 +463,34 @@ class ControleTableaux:
         comparer("T6", "actuel", "T4", "actuel", "Budget actuel des dépenses (T6) = montant actuel des emplois (T4)")
         comparer("T6", "initial", "T4", "initial", "Budget initial des dépenses (T6) = montant initial des emplois (T4)",
                  "Mineure")
+        self._activites_t4_t6()
+
+    def _activites_t4_t6(self) -> None:
+        """Les activités (codes budgétaires) présentées au tableau 4 doivent être celles exécutées au tableau 6."""
+        if "T4" not in self.par_code or "T6" not in self.par_code:
+            return
+
+        def codes(tab):
+            res = {}
+            for l in tab.lignes:
+                m = re.match(r"^\s*(\d{10,12})\b", l.libelle)
+                if m and l.type == "ligne":
+                    res[m.group(1)] = l.libelle
+            return res
+
+        c4, c6 = codes(self.par_code["T4"]), codes(self.par_code["T6"])
+        if not c4 or not c6:
+            return
+        seuls4, seuls6 = sorted(set(c4) - set(c6)), sorted(set(c6) - set(c4))
+        if seuls4 or seuls6:
+            msg = ("Les activités du tableau 4 (présentation des emplois) et du tableau 6 (exécution des dépenses) ne "
+                   "portent pas les mêmes codes."
+                   + (f" Uniquement au T4 : {', '.join(seuls4)}." if seuls4 else "")
+                   + (f" Uniquement au T6 : {', '.join(seuls6)}." if seuls6 else "")
+                   + " Vérifier la nomenclature des activités (budget-programmes).")
+            self.constats.append(Constat("exec_depenses", "Mêmes activités dans les tableaux 4 et 6", msg, "Mineure",
+                                         "coherence", self.par_code["T6"].nom, "", f"{len(c4)} codes (T4)",
+                                         f"{len(c6)} codes (T6)"))
 
     # ------------------------------------------------------------------ agrégats utiles
     def agregats(self) -> dict[str, float]:

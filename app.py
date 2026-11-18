@@ -46,6 +46,16 @@ if not st.button("Lancer l'analyse", type="primary"):
     st.stop()
 
 parametres = charger_parametres()
+from analyse_cb import lecture  # noqa: E402
+
+barre = st.empty()
+
+
+def _progression(page, total):
+    barre.progress(page / total, text=f"Document scanné : lecture OCR page {page}/{total}…")
+
+
+lecture.RAPPEL_PROGRESSION = _progression
 with tempfile.TemporaryDirectory() as tmp:
     tmp = Path(tmp)
     chemin_modele = None
@@ -70,6 +80,7 @@ with tempfile.TemporaryDirectory() as tmp:
         except Exception as exc:
             st.error(f"{f.name} : {exc}")
             continue
+        barre.empty()
         resultats.append((res, sortie))
 
         with st.expander(f"📄 {res.infos.epn} – {res.periode.libelle}", expanded=len(fichiers) == 1):

@@ -9,7 +9,7 @@ from .canevas import RUBRIQUES, Rubrique
 from .lecture import RE_LEGENDE, Bloc, DocumentRapport
 from .texte import extrait, nb_mots, normaliser
 
-RE_NUMEROTATION = re.compile(r"^\s*(([IVX]{1,5}|\d{1,2}|[A-H])(\.\d[\d.]*\s*[-.)]?\s*|[.\-)]\s*)|[-•●▪➢•*]\s*)+")
+RE_NUMEROTATION = re.compile(r"^\s*(([IVXLivxl1]{1,5}|\d{1,2}|[A-H])(\.\d[\d.]*\s*[-.)]?\s*|[.\-)]\s*)|[-•●▪➢•*]\s*)+")
 
 
 @dataclass
@@ -114,10 +114,14 @@ class AnalyseStructure:
                 else:
                     self._calculer_fins(filles, 0, n)
 
-        # 3) Texte et volume de chaque rubrique
+        # 3) Texte et volume de chaque rubrique (les titres des sous-parties ne comptent pas comme contenu :
+        #    une partie dont toutes les sous-parties sont vides est elle-même vide)
+        titres_detectes = {d.debut for d in self.detections.values() if d.mode == "titre"}
         for det in self.detections.values():
             if det.mode == "titre":
-                det.texte = self.doc.texte(det.debut + 1, det.fin)
+                det.texte = "\n".join(b.texte for b in self.doc.blocs[det.debut + 1:det.fin]
+                                      if b.type == "p" and not b.sommaire and b.index not in titres_detectes
+                                      and not (b.type == "p" and b.candidat_titre and len(b.texte) < 80))
             elif det.mode == "texte":
                 det.texte = "\n".join(self.doc.blocs[i].texte for i in det.paragraphes)
                 det.fin = det.paragraphes[-1] + 1
@@ -161,9 +165,12 @@ class AnalyseStructure:
         for b in self.doc.paragraphes:
             if not b.sommaire:
                 continue
-            t = re.sub(r"(\.{3,}|…+|_{3,}|\t)+\s*\d{1,3}\s*$", "", b.texte)
+            t = re.split(r"\s*(?:[.…_]{2,}[.…_,/ ]{2,}|\t)", b.texte)[0]  # points de conduite (y compris OCR)
+            t = re.sub(r"(\.{3,}|…+|_{3,}|\t)+\s*\d{1,3}\s*$", "", t)
             t = re.sub(r"\s+\d{1,3}\s*$", "", t)
             t = normaliser(_sans_numero(t))
+            if re.match(r"^\d{6,}", t):
+                continue  # ligne de compte (annexe) prise à tort pour une entrée de sommaire
             if t and t not in ("table des matieres", "sommaire", "liste des tableaux") \
                     and not t.startswith("tableau") and len(t) > 2:
                 entrees.append(t)
@@ -172,8 +179,12 @@ class AnalyseStructure:
         titres_corps = [normaliser(_sans_numero(b.texte)) for b in self.titres]
         absents = []
         for e in entrees:
+            # Les points de conduite mal lus par l'OCR laissent du « bruit » après le titre : on compare aussi
+            # le titre du corps au début de l'entrée du sommaire.
             ok = any(e == t or e in t or (t and t in e and len(t) > 5)
-                     or difflib.SequenceMatcher(None, e, t).ratio() >= 0.8 for t in titres_corps)
+                     or difflib.SequenceMatcher(None, e, t).ratio() >= 0.8
+                     or (len(t) >= 8 and difflib.SequenceMatcher(None, e[:len(t) + 2], t).ratio() >= 0.8)
+                     for t in titres_corps)
             if not ok:
                 absents.append(e)
         if not absents:

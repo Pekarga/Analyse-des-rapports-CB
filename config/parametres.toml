@@ -9,6 +9,9 @@
 # (Pour 2023, la note n°0580 du 26/07/2023 fixait exceptionnellement le 04/08.)
 rapport_etape_date_limite = "31/07"
 rapport_annuel_date_limite = "30/04"
+# Rapports trimestriels (1er, 3e et 4e trimestres ; le 2e trimestre est traité comme le rapport d'étape
+# au 30 juin) : nombre de jours après la fin du trimestre. >>> À CONFIRMER. <<<
+rapport_trimestriel_delai_jours = 30
 
 [appreciation]
 # Seuils (en %) de la mention attribuée au taux de conformité de la forme et au taux de fiabilité/cohérence.

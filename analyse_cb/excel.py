@@ -83,7 +83,8 @@ def remplir_modele(res: ResultatAnalyse, sortie: str | Path, modele: str | Path 
     ws["E9"].alignment = ENVELOPPE
     ws["A10"].value = res.canevas_en_vigueur[1]
     ws["A10"].font = POLICE_AUTO
-    ws["A2"].value = MENTION_AUTO + f" – fichier analysé : {res.doc.chemin.name} – le {date.today():%d/%m/%Y}"
+    ws["A2"].value = (MENTION_AUTO + f" – fichier analysé : {res.doc.chemin.name}"
+                      + (" (scanné, lu par OCR)" if res.doc.ocr else "") + f" – le {date.today():%d/%m/%Y}")
     ws["A2"].font = POLICE_AUTO
 
     # ---------------------------------------------------------------- I. délai
@@ -159,7 +160,8 @@ def remplir_modele(res: ResultatAnalyse, sortie: str | Path, modele: str | Path 
                      + f". {len(res.constats)} constat(s) automatique(s) dont {len(majeures)} majeur(s) "
                      "(détail dans l'onglet « Contrôles automatiques »).")
     if majeures:
-        synthese_fond += "\nPrincipaux constats : " + " | ".join(c.message for c in majeures[:5])
+        from .analyse import _court
+        synthese_fond += "\nPrincipaux constats : " + " | ".join(_court(c, 160) for c in majeures[:5])
     synthese_fond += "\nLes rubriques « À apprécier » nécessitent une lecture qualitative du Chargé d'Études."
     _ecrire_long(ws, 127, synthese_fond, hauteur=_hauteur(synthese_fond, 95, 45))
 
@@ -299,7 +301,7 @@ def ajouter_onglets_detail(wb: Workbook, res: ResultatAnalyse) -> None:
     ws["A1"] = "Synthèse de l'analyse automatique"
     ws["A1"].font = Font(bold=True, size=14, color="1F4E78")
     infos = [
-        ("Fichier analysé", res.doc.chemin.name), ("EPN", res.infos.epn), ("Contrôleur Budgétaire", res.infos.controleur),
+        ("Fichier analysé", res.doc.chemin.name + (" — document scanné, lu par OCR" if res.doc.ocr else "")), ("EPN", res.infos.epn), ("Contrôleur Budgétaire", res.infos.controleur),
         ("Période", res.periode.libelle), ("Date limite de transmission", res.date_limite.strftime("%d/%m/%Y")),
         ("Date de réception", res.infos.date_reception.strftime("%d/%m/%Y") if res.infos.date_reception else "—"),
         ("Délai", res.appreciation_delai), ("Canevas en vigueur", res.canevas_en_vigueur[0]),
