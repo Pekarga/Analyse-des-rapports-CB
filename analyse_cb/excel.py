@@ -15,7 +15,8 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from .analyse import (A_APPRECIER, A_VERIFIER, COHERENT, CONFORME, FIABLE, INCOHERENT, NON_APPLICABLE,
                       NON_CONFORME, NON_FIABLE, NON_RENSEIGNE, SANS_OBJET, RACINE, ResultatAnalyse)
 from .controles import CATEGORIES
-from .texte import format_montant, format_taux
+from .commentaires import aerer, phrase_constat
+from .texte import format_taux
 
 MODELE_DEFAUT = RACINE / "modeles" / "Fichier_analyse_des_rapports_des_CB.xlsx"
 
@@ -114,6 +115,19 @@ def remplir_modele(res: ResultatAnalyse, sortie: str | Path, modele: str | Path 
                       + (" (document scanné)" if res.doc.ocr else "") + f" – analyse du {date.today():%d/%m/%Y}")
     ws["A2"].font = POLICE_AUTO
 
+    # ---------------------------------------------------------------- libellés du modèle corrigés
+    # (le modèle de la DCB intitule « forme » l'encadré du fond, nomme « Contrôle de gestion / Contrôle de
+    # trésorerie » les lignes du COGES et du comité de trésorerie, et inverse les numéros des tableaux 1 et 2)
+    for cellule, libelle in (("A55", " - COGES / Organes de supervision (Conseil de gestion)"),
+                             ("A56", " - Comité de trésorerie"),
+                             ("A116", " - COGES / Organes de supervision (Conseil de gestion)"),
+                             ("A117", " - Comité de trésorerie"),
+                             ("A65", " - Tableau 2 : Budgets des trois derniers exercices"),
+                             ("A66", " - Tableau 1 : Budget de l'année comparé à celui de l'année précédente"),
+                             ("A125", "Appréciation générale du fond du rapport : ")):
+        if ws[cellule].value:
+            ws[cellule].value = libelle
+
     # ---------------------------------------------------------------- I. délai
     ws["A14"].value = res.periode.fin
     ws["B14"].value = res.date_limite
@@ -138,11 +152,12 @@ def remplir_modele(res: ResultatAnalyse, sortie: str | Path, modele: str | Path 
             continue
         ws[f"C{l.ligne}"].value = l.statut
         ws[f"C{l.ligne}"].alignment = CENTRE
-        ws[f"E{l.ligne}"].value = l.precision
+        texte_e = aerer(l.redige or l.precision, 62)
+        ws[f"E{l.ligne}"].value = texte_e
         ws[f"E{l.ligne}"].alignment = ENVELOPPE
         ws[f"E{l.ligne}"].font = Font(name="Calibri", size=9)
         ws.row_dimensions[l.ligne].height = max(ws.row_dimensions[l.ligne].height or 15,
-                                                _hauteur(l.precision, 38, 22))
+                                                _hauteur(texte_e, 70, 22))
     ws.column_dimensions["E"].width = 55
     dv_forme = DataValidation(type="list", formula1=f'"{CONFORME},{NON_CONFORME},{A_VERIFIER},{NON_APPLICABLE}"',
                               allow_blank=True)
@@ -151,7 +166,7 @@ def remplir_modele(res: ResultatAnalyse, sortie: str | Path, modele: str | Path 
     _mettre_en_forme_statuts(ws, "C22:C74")
 
     from .redaction import appreciation_forme
-    synthese_forme = _prefixe(res) + appreciation_forme(res)
+    synthese_forme = _prefixe(res) + aerer(appreciation_forme(res))
     _ecrire_long(ws, 78, synthese_forme.strip())
     _ajuster_texte(ws, 78, synthese_forme.strip())
 
@@ -162,11 +177,12 @@ def remplir_modele(res: ResultatAnalyse, sortie: str | Path, modele: str | Path 
         for col, val in (("C", l.fiabilite), ("D", l.coherence)):
             ws[f"{col}{l.ligne}"].value = val
             ws[f"{col}{l.ligne}"].alignment = CENTRE
-        ws[f"E{l.ligne}"].value = l.commentaire
+        texte_e = aerer(l.redige or l.commentaire, 62)
+        ws[f"E{l.ligne}"].value = texte_e
         ws[f"E{l.ligne}"].alignment = ENVELOPPE
         ws[f"E{l.ligne}"].font = Font(name="Calibri", size=9)
         ws.row_dimensions[l.ligne].height = max(ws.row_dimensions[l.ligne].height or 15,
-                                                _hauteur(l.commentaire, 38, 22))
+                                                _hauteur(texte_e, 70, 22))
     dv_fond_f = DataValidation(type="list", formula1=f'"{FIABLE},{NON_FIABLE},{A_APPRECIER},{NON_RENSEIGNE},{SANS_OBJET}"',
                                allow_blank=True)
     dv_fond_c = DataValidation(type="list", formula1=f'"{COHERENT},{INCOHERENT},{A_APPRECIER},{NON_RENSEIGNE},{SANS_OBJET}"',
@@ -177,7 +193,7 @@ def remplir_modele(res: ResultatAnalyse, sortie: str | Path, modele: str | Path 
     dv_fond_c.add("D83:D123")
     _mettre_en_forme_statuts(ws, "C83:D123")
     from .redaction import appreciation_fond
-    synthese_fond = _prefixe(res) + appreciation_fond(res)
+    synthese_fond = _prefixe(res) + aerer(appreciation_fond(res))
     _ecrire_long(ws, 127, synthese_fond)
     _ajuster_texte(ws, 127, synthese_fond)
 
@@ -214,10 +230,10 @@ def remplir_modele(res: ResultatAnalyse, sortie: str | Path, modele: str | Path 
 
     # ---------------------------------------------------------------- V. appréciation générale
     from .redaction import appreciation_generale
-    projet = _prefixe(res) + appreciation_generale(res)
+    projet = _prefixe(res) + aerer(appreciation_generale(res))
     _ecrire_long(ws, 166, projet, 178)
     _ajuster_texte(ws, 166, projet, derniere=178)
-    suite = suite_a_donner(res)
+    suite = aerer(suite_a_donner(res))
     _ecrire_long(ws, 181, suite, 183)
     ws.print_area = "A1:E184"
     ws.sheet_properties.pageSetUpPr.fitToPage = True
@@ -313,19 +329,21 @@ def ajouter_onglets_detail(wb: Workbook, res: ResultatAnalyse) -> None:
         det = res.structure.detections.get(l.code)
         _ligne(ws, i, [l.libelle, rub.niveau if rub else "", "Non" if l.hors_grille else "Oui", l.statut,
                        {"titre": "Titre", "texte": "Texte", None: "—"}[det.mode] if det else "",
-                       det.nb_mots if det else "", l.precision])
+                       det.nb_mots if det else "", l.redige or l.precision])
         ws.cell(i, 4).fill = PatternFill("solid", fgColor=_couleur(l.statut) or "FFFFFF")
 
     # Contrôles automatiques
     ws = wb.create_sheet("Contrôles automatiques")
-    _entetes(ws, 1, ["Gravité", "Nature", "Rubrique", "Tableau", "Ligne", "Contrôle", "Attendu (recalculé)",
-                     "Constaté (rapport)", "Message"], [10, 12, 22, 30, 30, 35, 18, 18, 80])
+    _entetes(ws, 1, ["Gravité", "Nature", "Rubrique", "Constat", "Valeur du rapport", "Valeur attendue",
+                     "Contrôle effectué", "Détail technique"], [11, 11, 28, 90, 18, 18, 32, 70])
     from .canevas import PAR_CODE as PC
-    constats = sorted(res.constats, key=lambda c: (c.gravite != "Majeure", c.nature))
+    systeme = "SIGOBE" if getattr(res.situation, "systeme", "") == "SIGOBE" else "système d'information budgétaire"
+    ordre = {"Majeure": 0, "Mineure": 1, "Information": 2}
+    constats = sorted(res.constats, key=lambda c: (ordre.get(c.gravite, 3), c.nature))
     for i, c in enumerate(constats, start=2):
         _ligne(ws, i, [c.gravite, {"fiabilite": "Fiabilité", "coherence": "Cohérence"}.get(c.nature, c.nature),
-                       PC[c.rubrique].libelle if c.rubrique in PC else c.rubrique, c.tableau, c.ligne, c.controle,
-                       c.attendu, c.constate, c.message])
+                       PC[c.rubrique].libelle if c.rubrique in PC else c.rubrique, phrase_constat(c, systeme),
+                       c.constate, c.attendu, c.controle, c.message])
         ws.cell(i, 1).fill = PatternFill("solid", fgColor=_couleur(c.gravite) or "FFFFFF")
     if not constats:
         ws.cell(2, 1, "Aucune anomalie détectée par les contrôles automatiques.")
@@ -525,7 +543,7 @@ def tableau_de_bord(resultats: list[tuple[ResultatAnalyse, Path]], sortie: str |
         ws.cell(i, 4).number_format = ws.cell(i, 5).number_format = "DD/MM/YYYY"
         ws.cell(i, 20).hyperlink = fichier.name
         if r.confrontation:
-            ws.cell(i, 17).fill = PatternFill("solid", fgColor=VERT if r.appreciation_decret.startswith("Conforme") else ORANGE)
+            ws.cell(i, 17).fill = PatternFill("solid", fgColor=VERT if r.decret_conforme else ORANGE)
         if r.rapprochement:
             ws.cell(i, 18).fill = PatternFill("solid", fgColor=ROUGE if r.rapprochement.nb_ecarts else VERT)
         ws.cell(i, 9).fill = PatternFill("solid", fgColor=VERT if r.score_forme >= 75 else ORANGE if r.score_forme >= 50 else ROUGE)

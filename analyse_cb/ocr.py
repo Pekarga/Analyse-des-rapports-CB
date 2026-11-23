@@ -28,7 +28,7 @@ class OCRIndisponible(RuntimeError):
 
 def ocr_disponible() -> tuple[bool, str]:
     try:
-        import cv2  # noqa: F401
+        import cv2  # noqa: F401  (vérifie seulement la présence du module)
         import pytesseract
         from .ressources import configurer_tesseract
         configurer_tesseract()

@@ -386,7 +386,6 @@ class ControleTableaux:
 
     # ------------------------------------------------------------------ fiabilité
     def _controler(self, tab: TableauAnalyse) -> None:
-        c = tab.colonnes
         if not tab.lignes:
             self._ajouter(tab, "Tableau vide", "", "", "", f"{tab.nom} : tableau présent mais non renseigné.",
                           "Majeure")
@@ -621,7 +620,7 @@ class ControleTableaux:
                 if a is None or b is None or abs(a - b) <= 1:
                     continue
                 self.constats.append(Constat(
-                    "exec_depenses", f"Même répartition par nature dans les tableaux 4 et 6",
+                    "exec_depenses", "Même répartition par nature dans les tableaux 4 et 6",
                     f"{nom} ({_LIBELLE_ROLE[role]}) : {format_montant(a)} au {t4.nom} contre {format_montant(b)} au {t6.nom}.",
                     "Majeure", "coherence", t6.nom, nom, format_montant(a), format_montant(b)))
                 break

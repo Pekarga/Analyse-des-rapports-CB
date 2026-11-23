@@ -12,7 +12,7 @@ from .controles import (ControlesTransverses, Element, Periode, controle_signatu
                         detecter_periode, extraire_difficultes_suggestions, identifier_controleur,
                         identifier_epn, lire_date, charger_referentiel)
 from .decret import ConfrontationDecret, Decret, choisir_decret, lire_decret
-from .decret import CONFORME as D_CONFORME, ECART as D_ECART
+from .decret import ECART as D_ECART
 from .lecture import DocumentRapport, lire_rapport
 from .situation import Rapprochement, SituationExecution, SourceSituation, charger_source, situation_pour
 from .structure import AnalyseStructure
@@ -46,6 +46,7 @@ class LigneForme:
     statut: str
     precision: str
     hors_grille: bool = False
+    redige: str = ""  # commentaire affiché dans le fichier d'analyse
 
 
 @dataclass
@@ -56,6 +57,7 @@ class LigneFond:
     fiabilite: str
     coherence: str
     commentaire: str
+    redige: str = ""  # commentaire affiché dans le fichier d'analyse
 
 
 @dataclass
@@ -100,19 +102,19 @@ class ResultatAnalyse:
 
     @property
     def appreciation_decret(self) -> str:
+        from .commentaires import synthese_decret
+        return synthese_decret(self)
+
+    @property
+    def decret_conforme(self) -> bool | None:
         if not self.confrontation:
-            return "Décret non fourni"
-        pts = [p for p in self.confrontation.points if p.statut in (D_CONFORME, D_ECART)]
-        ecarts = [p.theme for p in pts if p.statut == D_ECART]
-        if not pts:
-            return "Non vérifiable"
-        return "Conforme au décret" if not ecarts else "Écarts : " + ", ".join(ecarts)
+            return None
+        return not any(p.statut == D_ECART for p in self.confrontation.points)
 
     @property
     def appreciation_situation(self) -> str:
-        if not self.rapprochement:
-            return "Situation d'exécution non fournie" if not self.situation else "Non rapprochée"
-        return self.rapprochement.synthese
+        from .commentaires import synthese_situation
+        return synthese_situation(self)
 
     @property
     def ecart_jours(self) -> int | None:
@@ -271,6 +273,7 @@ def analyser(chemin: str | Path, infos: InfosRapport | None = None, parametres: 
     _evaluer_fond(res)
     if res.validation_directe:
         _valider(res)
+    _rediger(res)
     if not periode.detectee:
         doc.avertissements.append("La période couverte n'a pas pu être détectée : précisez-la (option --periode).")
     return res
@@ -495,6 +498,13 @@ def _evaluer_fond(res: ResultatAnalyse) -> None:
                        "Texte de création non conforme au référentiel des EPN.") + extrait
         elif det.nb_mots < rub.mots_min:
             com = f"Rubrique présente mais très peu développée ({det.nb_mots} mots).{extrait}"
+        if rub.code not in regles_tableaux and rub.code not in ("resultat_budgetaire", "ratios"):
+            propres = [c for c in res.constats if c.rubrique == rub.code and c.gravite != "Information"
+                       and not c.controle.startswith("Texte de création")]
+            if any(c.nature == "coherence" for c in propres):
+                coh = INCOHERENT
+            if any(c.nature == "fiabilite" for c in propres):
+                fiab = NON_FIABLE
         fiab, coh, com = _references(res, rub.code, fiab, coh, com)
         if res.doc.ocr and (fiab in (NON_FIABLE,) or coh in (INCOHERENT,)):
             com += " (Document scanné lu par OCR : confirmer les chiffres sur l'original. Détail : onglet « Contrôles automatiques ».)"
@@ -521,6 +531,15 @@ def _evaluer_fond(res: ResultatAnalyse) -> None:
         INCOHERENT if any(l.coherence == INCOHERENT for l in tous) else A_APPRECIER,
         f"{nb_ko} rubrique(s) présentant des anomalies de fiabilité ou de cohérence ; {nb_abs} rubrique(s) non renseignée(s)."))
     res.fond = lignes
+
+
+def _rediger(res: ResultatAnalyse) -> None:
+    """Commentaires rédigés en phrases simples, affichés dans le fichier d'analyse."""
+    from .commentaires import commentaire_fond, commentaire_forme
+    for l in res.forme:
+        l.redige = commentaire_forme(l, res)
+    for l in res.fond:
+        l.redige = commentaire_fond(l, res)
 
 
 def _valider(res: ResultatAnalyse) -> None:

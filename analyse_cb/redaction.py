@@ -177,15 +177,6 @@ def _ecart_num(c) -> float:
     return abs(a - b) if a is not None and b is not None else 0.0
 
 
-def _ex_calcul(c) -> str:
-    colonne = re.search(r"\(colonne ([^)]+)\)", c.message)
-    ligne = f"la ligne « {c.ligne} »" if c.ligne and not c.ligne.startswith(("Total", "total")) else (
-        "le total général" if c.ligne.lower().startswith("total") else "une ligne")
-    return (f"au {_tableau_court(c.tableau)}, {ligne}" + (f" ({colonne.group(1)})" if colonne else "")
-            + f" affiche {c.constate}{' FCFA' if re.search(r'\d{3}$', c.constate or '') else ''} alors que "
-            f"{'la somme des lignes' if c.controle.startswith(('Total', 'Sous-total')) else 'le montant recalculé'} s'établit à {c.attendu}{' FCFA' if re.search(r'\d{3}$', c.attendu or '') else ''}")
-
-
 
 DANS = {
     "introduction": "Dans l'introduction", "presentation_budget": "Dans la présentation du budget",

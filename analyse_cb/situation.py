@@ -24,8 +24,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
-from .controles import FicheEPN, Periode, lire_date, lire_csv
-from .tableaux import Constat, ControleTableaux, TableauAnalyse
+from .controles import FicheEPN, Periode, lire_date
+from .tableaux import Constat, ControleTableaux
 from .texte import format_montant, format_taux, lire_nombre, normaliser
 
 CONCORDANT, ECART, NON_COMPARABLE = "Concordant", "Écart", "Non comparable"

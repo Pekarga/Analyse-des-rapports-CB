@@ -14,7 +14,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date as Date
 from pathlib import Path
 
 from .controles import FicheEPN, Periode, lire_date
@@ -86,7 +86,7 @@ class Decret:
     reference: str = ""
     type_texte: str = ""
     numero: str = ""
-    date: date | None = None
+    date: Date | None = None
     denomination: str = ""
     sigle: str = ""
     categorie: str = ""

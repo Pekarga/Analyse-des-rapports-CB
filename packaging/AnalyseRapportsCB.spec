@@ -5,7 +5,8 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
 
 racine = Path(SPECPATH).parent
-datas = [(str(racine / "config"), "config"), (str(racine / "modeles"), "modeles")]
+datas = [(str(racine / "config"), "config"), (str(racine / "modeles"), "modeles"),
+         (str(racine / "packaging" / "icone.ico"), "packaging"), (str(racine / "packaging" / "icone.png"), "packaging")]
 datas += collect_data_files("docx") + collect_data_files("pdfminer") + collect_data_files("pypdfium2")
 datas += collect_data_files("pypdfium2_raw")
 binaries = collect_dynamic_libs("pypdfium2_raw") + collect_dynamic_libs("pypdfium2")

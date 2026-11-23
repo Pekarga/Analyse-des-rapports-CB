@@ -234,7 +234,7 @@ def test_decret_rapport_conforme(res_conforme_ref):
                   "Sessions du Conseil de gestion"):
         assert statuts[theme] == "Conforme", theme
     assert r.confrontation.constats == []
-    assert r.appreciation_decret == "Conforme au décret"
+    assert r.appreciation_decret == "Conforme au décret de création sur tous les points vérifiés."
     assert fond(r, "missions").coherence == "Cohérent"
     assert fond(r, "texte_creation").fiabilite == "Fiable"
 
@@ -330,7 +330,7 @@ def test_excel_references(res_anomalies_ref, tmp_path):
     assert "Écart" in valeurs and "Concordant" in valeurs
     tdb = openpyxl.load_workbook(tableau_de_bord([(res_anomalies_ref, sortie)], tmp_path / "tdb.xlsx")).active
     entetes = [c.value for c in tdb[1]]
-    assert tdb.cell(2, entetes.index("Conformité au décret de création") + 1).value.startswith("Écarts")
+    assert "écarts sur les missions" in tdb.cell(2, entetes.index("Conformité au décret de création") + 1).value
 
 
 def test_cli_references(rapports, references, tmp_path):
@@ -527,3 +527,17 @@ def test_interface_importable():
     pytest.importorskip("tkinter")
     from analyse_cb import interface
     assert interface.Application and interface.main
+
+
+def test_redaction_commentaires_grille(res_anomalies_ref, tmp_path):
+    """Commentaires de la grille rédigés en phrases simples, sans mentions techniques, et aérés."""
+    from analyse_cb.commentaires import aerer
+    textes = [l.redige for l in res_anomalies_ref.forme + res_anomalies_ref.fond if l.ligne]
+    assert all(textes)
+    for t in textes:
+        assert "(s)" not in t and "Titre trouvé" not in t and "Rubrique renseignée (" not in t, t
+    sit = res_anomalies_ref.appreciation_situation
+    assert "agrégats comparés concordent" in sit and "/" not in sit.split(":", 1)[-1]
+    long = " ".join(["Phrase numéro %d assez longue pour remplir une ligne entière du texte." % i for i in range(30)])
+    blocs = aerer(long, 100, 3).split("\n\n")
+    assert len(blocs) > 1 and all(len(b) <= 300 for b in blocs)

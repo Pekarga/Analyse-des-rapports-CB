@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .lecture import RE_PUCE, DocumentRapport
 from .structure import AnalyseStructure, Detection
-from .tableaux import Constat, ControleTableaux, _comparer_taux
+from .tableaux import Constat, ControleTableaux
 from .texte import format_montant, format_taux, lire_nombre, normaliser
 
 MOIS = {"janvier": 1, "fevrier": 2, "mars": 3, "avril": 4, "mai": 5, "juin": 6, "juillet": 7, "aout": 8,
@@ -411,6 +411,9 @@ class ControlesTransverses:
                 continue
             n = b.norm
             rub = self.s.section_du_bloc(b.index) or "introduction"
+            from .canevas import PAR_CODE
+            if rub in PAR_CODE and PAR_CODE[rub].parent == "introduction":
+                rub = "introduction"
             m = re.search(r"(present rapport|rapport)[^.]{0,120}\b(exercice|gestion|annee)\s+((?:19|20)\d\d)", n)
             if m and int(m.group(3)) != p.annee:
                 self._ajouter(rub, "Exercice cité conforme à la période",
@@ -541,7 +544,8 @@ class ControlesTransverses:
                     r"\brda\b|abonnement"),
         }
         for code, (libelle, formule, valeurs, motif) in comp.items():
-            ratio = Ratio(code, libelle, formule, {k: v for k, v in valeurs.items() if v is not None})
+            # Un ratio hors de [0 ; 100 %] traduit des totaux incohérents dans les tableaux : il n'est pas retenu.
+            ratio = Ratio(code, libelle, formule, {k: v for k, v in valeurs.items() if v is not None and 0 <= v <= 100.5})
             cites = ratios_cites(texte, motif) if texte else []
             if cites:
                 ratio.cite, ratio.phrase, _ = cites[0]
