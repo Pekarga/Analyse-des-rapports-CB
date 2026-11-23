@@ -510,3 +510,20 @@ def test_validation_directe_et_mode_brouillon(rapports, tmp_path):
     assert statut(b, "antennes") == "À vérifier"
     ws = openpyxl.load_workbook(remplir_modele(b, tmp_path / "brouillon.xlsx")).worksheets[0]
     assert ws["A78"].value.startswith("[Pré-rempli")
+
+
+def test_ressources_application_empaquetee(tmp_path, monkeypatch):
+    """Dans l'application Windows, les paramètres modifiables sont copiés dans le profil de l'utilisateur."""
+    from analyse_cb import ressources
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(RACINE), raising=False)
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    chemin = ressources.fichier_config("parametres.toml")
+    assert chemin == tmp_path / "AnalyseRapportsCB" / "parametres.toml" and chemin.exists()
+    assert ressources.dossier_ressources() == RACINE
+
+
+def test_interface_importable():
+    pytest.importorskip("tkinter")
+    from analyse_cb import interface
+    assert interface.Application and interface.main

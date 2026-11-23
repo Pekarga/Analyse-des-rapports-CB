@@ -18,9 +18,11 @@ from .situation import Rapprochement, SituationExecution, SourceSituation, charg
 from .structure import AnalyseStructure
 from .tableaux import Constat, ControleTableaux
 
-RACINE = Path(__file__).resolve().parent.parent
-PARAMETRES_DEFAUT = RACINE / "config" / "parametres.toml"
-REFERENTIEL_DEFAUT = RACINE / "config" / "referentiel_epn.csv"
+from .ressources import dossier_ressources, fichier_config
+
+RACINE = dossier_ressources()
+PARAMETRES_DEFAUT = fichier_config("parametres.toml")
+REFERENTIEL_DEFAUT = fichier_config("referentiel_epn.csv")
 
 NOTE_OCR = " [Lecture OCR d'un document scanné : à confirmer sur l'original.]"
 

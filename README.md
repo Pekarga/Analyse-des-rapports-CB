@@ -29,6 +29,22 @@ Le fichier produit contient aussi des onglets de détail : **Synthèse**, **Cont
 
 Quand plusieurs rapports sont analysés ensemble, un **tableau de bord consolidé** récapitule tous les EPN : délais, taux de conformité, rubriques absentes, anomalies, conformité au décret, concordance avec la situation d'exécution et suite à donner.
 
+## Application de bureau Windows (recommandée)
+
+L'outil est disponible sous forme d'**application Windows** : un installateur `AnalyseRapportsCB-Installation-x.y.z.exe` installe le programme (sans droits d'administrateur), crée les raccourcis dans le menu Démarrer et sur le Bureau, et intègre la lecture des documents scannés (Tesseract OCR, langue française). Aucun autre logiciel n'est nécessaire.
+
+**Obtenir l'installateur** : il est fabriqué automatiquement sur GitHub à chaque modification de l'outil (onglet **Actions** du dépôt → workflow « Application Windows » → dernière exécution → artefact **AnalyseRapportsCB-Windows**, qui contient l'installateur et une version portable en .zip). Pour une version publiée, poussez un tag `vX.Y.Z` : l'installateur est alors joint à la « Release » correspondante.
+
+**Utilisation** :
+
+1. ajouter les rapports (fichiers ou dossier entier) et, par double-clic, saisir leur date de réception ;
+2. ajouter, si vous les avez, les décrets de création et les situations d'exécution (SIGOBE, Excel, CSV, PDF) ;
+3. indiquer le Chargé d'Études et le dossier des résultats, puis cliquer sur **Lancer l'analyse**.
+
+Les résultats s'affichent dans la fenêtre (forme, fond, anomalies majeures, suite à donner) ; un double-clic ouvre le fichier d'analyse Excel. Avec plusieurs rapports, un tableau de bord consolidé est aussi produit. Le menu **Paramètres** ouvre les fichiers modifiables (délais, seuils, référentiel des EPN), copiés au premier lancement dans `%APPDATA%\AnalyseRapportsCB`.
+
+Construction manuelle (poste Windows avec Python 3.12) : `pip install -r requirements.txt pyinstaller`, puis `pyinstaller packaging/AnalyseRapportsCB.spec` et `iscc packaging\installateur.iss` (Inno Setup 6). Placez au préalable le dossier de Tesseract (avec `tessdata\fra.traineddata`) dans `tesseract\` à la racine du dépôt pour l'intégrer à l'application.
+
 ## Installation (une seule fois)
 
 Prérequis : Python 3.11 ou plus récent (https://www.python.org, cocher « Add Python to PATH » sous Windows).
@@ -52,7 +68,15 @@ pip install streamlit pandas
 
 ## Utilisation
 
-### 1. Interface web (recommandée pour les Chargés d'Études)
+### 1. Application de bureau (avec Python installé)
+
+```bash
+python -m analyse_cb.interface
+```
+
+(ou double-clic sur `AnalyseRapportsCB.pyw`).
+
+### 2. Interface web
 
 ```bash
 streamlit run app.py
@@ -60,7 +84,7 @@ streamlit run app.py
 
 Le navigateur s'ouvre. Il suffit ensuite de déposer les rapports (et, si vous les avez, les décrets de création et la ou les situations d'exécution), de saisir les dates de réception, de cliquer sur **Lancer l'analyse** et de télécharger les fichiers d'analyse (et le tableau de bord s'il y a plusieurs rapports). Tout se passe sur le poste : aucun document n'est envoyé sur Internet.
 
-### 2. Ligne de commande
+### 3. Ligne de commande
 
 Un seul rapport :
 
@@ -152,7 +176,10 @@ analyse_cb/
   analyse.py     orchestration et appréciations (forme / fond)
   excel.py       remplissage du modèle, onglets de détail, tableau de bord
   __main__.py    ligne de commande
+  interface.py   application de bureau (Tkinter)
+  ressources.py  emplacement des ressources (application empaquetée, Tesseract intégré)
 app.py           interface web (Streamlit)
+packaging/       construction de l'application Windows (PyInstaller, installateur Inno Setup, icône)
 config/          paramètres et référentiel des EPN
 modeles/         fichier d'analyse de la DCB
 exemples/        générateur de rapports fictifs pour les tests

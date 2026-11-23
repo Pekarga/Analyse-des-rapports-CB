@@ -30,8 +30,10 @@ def ocr_disponible() -> tuple[bool, str]:
     try:
         import cv2  # noqa: F401
         import pytesseract
+        from .ressources import configurer_tesseract
+        configurer_tesseract()
     except ImportError as exc:
-        return False, f"module Python manquant ({exc.name}) : pip install pytesseract opencv-python-headless"
+        return False, (f"module Python manquant ({exc.name or exc}) : pip install pytesseract opencv-python-headless")
     try:
         langues = pytesseract.get_languages(config="")
     except Exception:
