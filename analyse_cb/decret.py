@@ -399,7 +399,8 @@ def _sessions_citees(texte: str) -> int | None:
     if m:
         v = m.group(1)
         return NOMBRES.get(v) or (int(v) if v.isdigit() else None)
-    if re.search(r"(?:conseil de gestion|coges)[^.]{0,100}(?:ne s.est pas reuni|aucune (session|reunion))", n):
+    if re.search(r"(?:conseil de gestion|coges)[^.]{0,100}(?:ne s.est pas reuni|aucune (session|reunion))", n) \
+            or re.search(r"\baucun(e)? (conseil|session|reunion)\b[^.]{0,40}\b(tenu|tenue|reuni|organise)", n):
         return 0
     return None
 
@@ -577,6 +578,13 @@ class ConfrontationDecret:
     def _sessions_conseil(self) -> None:
         d = self.decret
         if not d.sessions_conseil_par_an:
+            # Périodicité non fixée par le décret : on signale tout de même un organe prévu qui ne fonctionne pas.
+            texte = self.s.texte_section("coges") or self.s.texte_section("gouvernance")
+            if "Conseil de gestion" in d.organes and texte and _sessions_citees(texte) == 0:
+                self.points.append(PointDecret(
+                    "Sessions du Conseil de gestion", "coges", "Conseil de gestion prévu par le décret (périodicité non fixée)",
+                    "Selon le rapport, aucune session du Conseil de gestion ne s'est tenue : organe de gouvernance prévu "
+                    "par le décret non fonctionnel (point à relever dans la synthèse sur la gouvernance des EPN).", A_VERIFIER))
             return
         mois = {"etape": 6, "trimestriel": 3, "annuel": 12}.get(self.periode.type, 12)
         if self.periode.type == "trimestriel" and self.periode.trimestre:

@@ -161,7 +161,7 @@ def remplir_modele(res: ResultatAnalyse, sortie: str | Path, modele: str | Path 
                      "(détail dans l'onglet « Contrôles automatiques »).")
     if majeures:
         from .analyse import _court
-        synthese_fond += "\nPrincipaux constats : " + " | ".join(_court(c, 160) for c in majeures[:5])
+        synthese_fond += "\nPrincipaux constats : " + " | ".join(_court(c, 200) for c in principaux_constats(res, 6))
     synthese_fond += f"\nDécret de création et d'organisation : {res.appreciation_decret}."
     synthese_fond += f"\nSituation d'exécution : {res.appreciation_situation}"
     synthese_fond += "\nLes rubriques « À apprécier » nécessitent une lecture qualitative du Chargé d'Études."
@@ -217,6 +217,33 @@ def remplir_modele(res: ResultatAnalyse, sortie: str | Path, modele: str | Path 
     return sortie
 
 
+def principaux_constats(res: ResultatAnalyse, n: int = 6):
+    """Constats majeurs les plus significatifs, variés (au plus deux par tableau) : d'abord ceux qui reposent sur
+    les références externes (décret, situation d'exécution), puis les tableaux du canevas, puis le reste."""
+    def rang(c):
+        if c.controle.startswith("Texte de création"):
+            return 0
+        if "impossible" in c.message:
+            return 1
+        if c.controle.startswith("Concordance"):
+            return 2
+        if c.controle.startswith(("Total", "Sous-total")) or c.nature == "coherence":
+            return 3
+        if c.tableau.startswith("«"):
+            return 5  # tableaux hors canevas
+        return 4
+    majeures = sorted((c for c in res.constats if c.gravite == "Majeure"), key=rang)
+    retenus, par_tableau = [], {}
+    for c in majeures:
+        if par_tableau.get(c.tableau, 0) >= 2 and c.tableau:
+            continue
+        par_tableau[c.tableau] = par_tableau.get(c.tableau, 0) + 1
+        retenus.append(c)
+        if len(retenus) >= n:
+            break
+    return retenus
+
+
 def projet_appreciation(res: ResultatAnalyse) -> str:
     forts, faibles, recos = [], [], []
     if res.ecart_jours is not None:
@@ -225,16 +252,18 @@ def projet_appreciation(res: ResultatAnalyse) -> str:
             recos.append("Respecter les délais de transmission des rapports à la DCB.")
     if res.score_forme >= 90:
         forts.append("respect global du canevas de rédaction")
-    absentes = [l.libelle for l in res.forme if l.statut == NON_CONFORME and l.code not in ("signature", "sommaire")]
+    absentes = [l.libelle for l in res.forme if l.statut == NON_CONFORME and l.code not in ("signature", "sommaire", "global_forme", "tableaux")]
     if absentes:
         faibles.append("rubriques/tableaux manquants : " + "; ".join(absentes[:10]) + ("…" if len(absentes) > 10 else ""))
         recos.append("Se conformer strictement au canevas en vigueur (note n°0580/MBPE/DGBF/DCB) en intégrant les "
                      "rubriques et tableaux manquants.")
     calc = [c for c in res.tableaux.constats if c.nature == "fiabilite"]
+    calc_maj = [c for c in calc if c.gravite == "Majeure"]
     if res.tableaux.par_code and not calc:
         forts.append("tableaux chiffrés arithmétiquement justes")
     elif calc:
-        faibles.append(f"{len(calc)} erreur(s) de calcul dans les tableaux")
+        faibles.append(f"{len(calc_maj)} erreur(s) de calcul dans les tableaux (sommes, totaux, taux, disponibles)"
+                       + (f" et {len(calc) - len(calc_maj)} anomalie(s) de présentation" if len(calc) > len(calc_maj) else ""))
         recos.append("Vérifier les calculs (sous-totaux, totaux, taux) avant transmission du rapport.")
     coh = [c for c in res.constats if c.nature == "coherence"]
     if coh:
@@ -252,28 +281,68 @@ def projet_appreciation(res: ResultatAnalyse) -> str:
     if not res.difficultes.get("suggestions"):
         recos.append("Formuler des suggestions opérationnelles en réponse aux difficultés relevées.")
     if res.confrontation:
-        from .decret import ECART
+        from .decret import CONFORME as D_OK, ECART
         ecarts = [p for p in res.confrontation.points if p.statut == ECART]
+        conformes = [p.theme.lower() for p in res.confrontation.points if p.statut == D_OK]
+        if conformes:
+            forts.append("présentation conforme au décret de création pour : " + ", ".join(conformes))
         if ecarts:
-            faibles.append("écarts avec le décret de création et d'organisation (" + ", ".join(p.theme.lower() for p in ecarts) + ")")
-            recos.append("Rappeler fidèlement le cadre institutionnel de l'EPN (texte de création, missions, organes, "
-                         "ressources) tel que fixé par le décret de création.")
-        else:
-            forts.append("présentation de l'EPN conforme au décret de création")
+            faibles.append("écarts avec le décret de création et d'organisation : "
+                           + " ; ".join(f"{p.theme.lower()} ({p.constat.rstrip('.')})" for p in ecarts))
+            if any(p.theme.startswith("Référence du texte") for p in ecarts):
+                recos.append(f"Corriger la référence du texte de création de l'EPN : {res.decret.reference}.")
+            if any(p.rubrique != "texte_creation" for p in ecarts):
+                recos.append("Rappeler fidèlement le cadre institutionnel de l'EPN (missions, organes, mode de financement) "
+                             "tel que fixé par le décret de création.")
+        a_verifier = [p for p in res.confrontation.points if p.rubrique == "coges" and "aucune session" in p.constat]
+        if a_verifier:
+            faibles.append("Conseil de gestion non fonctionnel sur la période (aucune session), sans analyse des "
+                           "conséquences sur la gouvernance de l'EPN")
     if res.rapprochement:
-        if any(c.controle.startswith("Concordance") for c in res.rapprochement.constats):
-            faibles.append("montants du rapport non concordants avec la situation d'exécution de référence")
-            recos.append("Rapprocher les données du rapport de la situation d'exécution arrêtée à la fin de la période "
-                         "(système d'information budgétaire) et justifier les écarts.")
-        elif res.rapprochement.nb_concordants:
-            forts.append("données d'exécution concordantes avec la situation d'exécution de référence")
+        rap = res.rapprochement
+        ok = [l.libelle.lower() for l in rap.lignes if l.statut == "Concordant"]
+        if ok:
+            forts.append("montants concordants avec la situation d'exécution pour : " + ", ".join(ok[:6])
+                         + ("…" if len(ok) > 6 else ""))
+        impossibles = [c for c in rap.constats if "impossible" in c.message]
+        autres = [c for c in rap.constats if c.controle.startswith("Concordance") and c not in impossibles
+                  and c.gravite != "Information"]
+        if impossibles:
+            faibles.append("montants d'exécution supérieurs à ceux de la situation d'exécution de référence, pourtant "
+                           "arrêtée à une date postérieure (montants erronés)")
+            recos.append("Corriger les montants d'exécution à partir de la situation d'exécution du système d'information "
+                         "budgétaire arrêtée à la fin de la période.")
+        if autres:
+            faibles.append(f"{len(autres)} écart(s) avec la situation d'exécution de référence (prévisions, budget actuel, taux)")
+        budget = next((l for l in rap.lignes if l.libelle == "Budget actuel de dépenses" and l.statut == "Écart"), None)
+        if budget and budget.situation is not None:
+            recos.append(f"Présenter les dépenses sur la base du budget actuel ({format_montant(budget.situation)} selon "
+                         "la situation d'exécution), en répercutant les mesures de régulation.")
+        if rap.date_conforme is False and res.situation.date_arrete:
+            recos.append(f"(Pour la DCB) Obtenir la situation d'exécution arrêtée au {res.periode.fin:%d/%m/%Y} pour "
+                         f"confirmer les écarts (situation fournie au {res.situation.date_arrete:%d/%m/%Y}).")
+    controles = {c.controle for c in res.constats}
+    if {"Exercice cité conforme à la période", "Trimestre cité conforme à la période"} & controles:
+        faibles.append("mentions d'un autre exercice ou trimestre (reprises d'un rapport antérieur)")
+        recos.append("Actualiser les mentions de période (exercice, trimestre, dates) avant transmission.")
+    if "Codes d'activité uniques" in controles:
+        faibles.append("codes d'activité erronés ou en double")
+        recos.append("Reprendre les codes d'activité de la nomenclature budgétaire (budget-programmes).")
+    if any(c.controle.startswith("Signe") for c in res.constats):
+        recos.append("Présenter les baisses et réductions de crédits avec leur signe négatif.")
+    exemples = [c for c in principaux_constats(res, 6) if not c.controle.startswith("Texte de création")][:5]
+    from .analyse import _court
+
+    def puces(liste, retrait="- "):
+        return "\n".join(f"{retrait}{x[0].upper()}{x[1:]}" for x in liste)
     texte = (f"{MENTION_AUTO}\n"
              f"Appréciation globale : forme {res.mention(res.score_forme).lower()} ({res.score_forme:.0f} %), fond "
              + (f"{res.mention(res.score_fond).lower()} ({res.score_fond:.0f} % des points vérifiables)." if res.score_fond is not None
                 else "à apprécier (aucun point vérifiable automatiquement).")
-             + "\n\nPoints forts : " + ("; ".join(forts) if forts else "à compléter") + "."
-             + "\n\nInsuffisances : " + ("; ".join(faibles) if faibles else "aucune insuffisance majeure détectée automatiquement") + "."
-             + "\n\nRecommandations au Contrôleur Budgétaire :\n" + ("\n".join(f"- {r}" for r in recos) if recos else "- RAS"))
+             + "\n\nPoints forts :\n" + (puces(forts) if forts else "- À compléter")
+             + "\n\nInsuffisances :\n" + (puces(faibles) if faibles else "- Aucune insuffisance majeure détectée automatiquement")
+             + ("\n\nPrincipaux constats chiffrés :\n" + puces([_court(c, 220) for c in exemples]) if exemples else "")
+             + "\n\nRecommandations au Contrôleur Budgétaire :\n" + (puces(recos) if recos else "- RAS"))
     return texte
 
 
