@@ -235,11 +235,11 @@ def suite_a_donner(res: ResultatAnalyse) -> str:
     seuil = res.parametres.get("appreciation", {}).get("retour_cb_si_score_forme_inferieur_a", 75)
     if res.score_forme < seuil or res.nb_anomalies_majeures >= res.parametres.get("appreciation", {}).get(
             "retour_cb_si_anomalies_majeures", 3):
-        return (f"Au regard des insuffisances relevées, tant sur la forme (taux de conformité de {res.score_forme:.0f} %) "
-                f"que sur le fond ({res.nb_anomalies_majeures} anomalies majeures), le rapport est retourné "
-                "au Contrôleur Budgétaire aux fins de correction et de complétude.")
-    return ("Le rapport est jugé exploitable et peut être intégré à la synthèse des rapports des Contrôleurs Budgétaires, "
-            "sous réserve de la prise en compte des observations formulées.")
+        return (f"Compte tenu de ces insuffisances, sur la forme ({res.score_forme:.0f} % de conformité) comme sur le fond "
+                f"({res.nb_anomalies_majeures} anomalies majeures), le rapport est retourné au Contrôleur Budgétaire "
+                "pour correction et complément.")
+    return ("Le rapport est exploitable. Il est intégré à la synthèse des rapports des Contrôleurs Budgétaires, "
+            "les observations ci-dessus devant être prises en compte dans le prochain rapport.")
 
 
 # ------------------------------------------------------------------ onglets de détail

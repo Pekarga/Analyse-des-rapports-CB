@@ -101,6 +101,7 @@ class SituationExecution:
     avertissements: list[str] = field(default_factory=list)
     filtre_epn: str = ""
     fichiers: list[Path] = field(default_factory=list)
+    systeme: str = ""  # « SIGOBE » si la situation provient de ce système
 
     @property
     def noms_fichiers(self) -> str:
@@ -256,6 +257,8 @@ def _sens_table(nom: str, roles: dict[str, int], lignes: list[list]) -> str | No
 
 def extraire_situation(source: SourceSituation, nom_epn: str = "", fiche: FicheEPN | None = None) -> SituationExecution:
     sit = SituationExecution(source.chemin, _date_arrete(source))
+    if "sigobe" in normaliser(source.texte + " " + source.chemin.name):
+        sit.systeme = "SIGOBE"
     vus: set[tuple] = set()
     valeurs_epn: set[str] = set()
     cibles = [normaliser(x) for x in (fiche.sigle if fiche else "", fiche.denomination if fiche else "", nom_epn) if x]
@@ -415,6 +418,7 @@ def fusionner(situations: list[SituationExecution]) -> SituationExecution:
             res.totaux_declares.setdefault(k, v)
         res.avertissements += s.avertissements
         res.filtre_epn = res.filtre_epn or s.filtre_epn
+        res.systeme = res.systeme or s.systeme
     if len(dates) > 1:
         res.avertissements.append("Les fichiers de situation n'ont pas la même date d'arrêté : "
                                   + ", ".join(f"{d:%d/%m/%Y}" for d in dates) + ".")

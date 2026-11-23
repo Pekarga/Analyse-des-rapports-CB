@@ -324,7 +324,7 @@ def test_excel_references(res_anomalies_ref, tmp_path):
     assert {"Décret de création", "Situation d'exécution"} <= set(wb.sheetnames)
     assert wb.worksheets[0]["D86"].value == "Incohérent"  # missions
     assert wb.worksheets[0]["C98"].value == "Non fiable"  # exécution en dépenses
-    assert "rapprochement avec la situation d'exécution" in wb.worksheets[0]["A127"].value
+    assert "La situation d'exécution" in wb.worksheets[0]["A127"].value
     assert "- " not in wb.worksheets[0]["A166"].value  # appréciation générale rédigée, sans tirets
     valeurs = [c.value for row in wb["Situation d'exécution"].iter_rows() for c in row]
     assert "Écart" in valeurs and "Concordant" in valeurs
@@ -485,14 +485,15 @@ def test_situation_sigobe_hierarchique_date_posterieure(rapports, tmp_path):
 def test_redaction_appreciation_forme(res_anomalies):
     from analyse_cb.redaction import appreciation_forme
     texte = appreciation_forme(res_anomalies)
-    assert texte.startswith("Le rapport du Contrôleur Budgétaire placé auprès de l'Agence Nationale d'Exemple")
+    assert texte.startswith("Le rapport du Contrôleur Budgétaire auprès de l'Agence Nationale d'Exemple")
     assert "note n°0580/MBPE/DGBF/DCB du 26 juillet 2023" in texte
-    assert "au titre de l'analyse de l'exécution du budget, l'analyse des ratios de gestion" in texte
-    assert "le tableau n°8 (principaux motifs des rejets) fait défaut" in texte
-    assert "Il conviendrait néanmoins de se conformer" in texte and "et de dater et signer le rapport." in texte
-    assert "la rubrique nouvelle introduite en 2023 (l'analyse de la gestion des risques) n'est pas traitée" in texte
+    assert "Dans l'analyse de l'exécution du budget, les ratios de gestion font défaut." in texte
+    assert "pour le premier semestre 2099 (rapport d'étape)" in texte
+    assert "le tableau n°8 (motifs des rejets) manque" in texte
+    assert "n'a pas traité la rubrique introduite en 2023 : l'analyse de la gestion des risques" in texte
     assert "« Analyse des marches publics »" in texte
-    assert "  " not in texte and " ," not in texte
+    assert "-" not in texte.replace("Contrôleur", "").split("\n")[-1][:3]  # pas de liste à tirets
+    assert "  " not in texte and " ," not in texte and "’" not in texte
 
 
 def test_validation_directe_et_mode_brouillon(rapports, tmp_path):
