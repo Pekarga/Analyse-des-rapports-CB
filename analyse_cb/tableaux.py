@@ -115,7 +115,14 @@ class TableauAnalyse:
                 break
         if vu:
             return total
-        return valeur_entete
+        if valeur_entete is not None:
+            return valeur_entete
+        # Nature présentée sur une seule ligne chiffrée (« 1 Personnel | 50 000 000 »), sans lignes de détail
+        for l in self.lignes:
+            n = normaliser(l.libelle)
+            if l.type == "ligne" and role in l.valeurs and RE_GROUPE.match(n) and re.search(motif, n):
+                return l.valeurs[role]
+        return None
 
 
 # ------------------------------------------------------------------ identification
