@@ -4,6 +4,11 @@ name: Application Windows
 # dans l'onglet « Actions » (artefacts). Une version publiée (tag v*) joint aussi l'installateur à la release.
 on:
   workflow_dispatch:
+    inputs:
+      version_publiee:
+        description: "Publier une version (ex. v2.0.0) : crée le tag et la Release avec l'installateur. Laisser vide pour une simple construction."
+        required: false
+        default: ""
   push:
     branches: ["main", "master", "claude/**"]
     tags: ["v*"]
@@ -86,8 +91,18 @@ jobs:
           path: installateur/*
           retention-days: 90
 
-      - name: Publication (versions taguées v*)
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Publication de la version (Release GitHub)
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.version_publiee != ''
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.version_publiee || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          name: Analyse des rapports des CB – ${{ inputs.version_publiee || github.ref_name }}
+          body: |
+            Application Windows d'analyse des rapports des Contrôleurs Budgétaires (canevas DCB, décret de création, situation d'exécution).
+
+            - **AnalyseRapportsCB-Installation-….exe** : installateur (sans droits d'administrateur ; raccourcis menu Démarrer et Bureau ; lecture des documents scannés intégrée).
+            - **AnalyseRapportsCB-portable-….zip** : version portable, à décompresser puis lancer `AnalyseRapportsCB.exe`.
+
+            Au premier lancement, Windows SmartScreen peut afficher un avertissement (application non signée) : « Informations complémentaires » puis « Exécuter quand même ».
           files: installateur/*
