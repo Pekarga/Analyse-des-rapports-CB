@@ -52,6 +52,7 @@ class AnalyseStructure:
                        if b.candidat_titre and not RE_LEGENDE.match(b.texte)
                        and not normaliser(b.texte).startswith("source")]
         self.detections: dict[str, Detection] = {}
+        self.sommaire_absents: list[str] = []  # entrées du sommaire / plan sans développement (texte d'origine)
         self._analyser()
 
     # ------------------------------------------------------------------ recherche
@@ -162,6 +163,7 @@ class AnalyseStructure:
     def controle_sommaire(self) -> tuple[str, str]:
         """Cohérence entre la table des matières et les titres effectivement présents."""
         entrees = []
+        originaux: dict[str, str] = {}
         for b in self.doc.paragraphes:
             if not b.sommaire:
                 continue
@@ -175,6 +177,9 @@ class AnalyseStructure:
                                "plan de redaction") \
                     and not t.startswith("tableau") and len(t) > 2:
                 entrees.append(t)
+                brut = re.split(r"\s*(?:[.…_]{2,}[.…_,/ ]{2,}|\t)", b.texte)[0]
+                brut = re.sub(r"(\.{3,}|…+|_{3,})\s*\d{1,3}\s*$", "", brut).strip()
+                originaux[t] = _sans_numero(brut).strip(" -–:")
         if not entrees:
             return "Non conforme", "Aucune table des matières (sommaire) n'a été détectée dans le rapport."
         titres_corps = [normaliser(_sans_numero(b.texte)) for b in self.titres]
@@ -188,6 +193,7 @@ class AnalyseStructure:
                      for t in titres_corps)
             if not ok:
                 absents.append(e)
+        self.sommaire_absents = [originaux.get(e, e) for e in absents]
         if not absents:
             return "Conforme", f"Les {len(entrees)} entrées du sommaire correspondent aux titres du rapport."
         taux = len(absents) / len(entrees)

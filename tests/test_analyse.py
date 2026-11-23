@@ -479,3 +479,16 @@ def test_situation_sigobe_hierarchique_date_posterieure(rapports, tmp_path):
     assert lignes[("90047390002", "réalisation")].statut == "Écart (décalage de date)"
     assert lignes[("90047390002", "budget actuel")].statut == "Concordant"
     assert any(c.gravite == "Majeure" and "impossibles" in c.message for c in rap.constats)
+
+
+def test_redaction_appreciation_forme(res_anomalies):
+    from analyse_cb.redaction import appreciation_forme
+    texte = appreciation_forme(res_anomalies)
+    assert texte.startswith("Le rapport du Contrôleur Budgétaire placé auprès de l'Agence Nationale d'Exemple")
+    assert "note n°0580/MBPE/DGBF/DCB du 26 juillet 2023" in texte
+    assert "au titre de l'analyse de l'exécution du budget, l'analyse des ratios de gestion" in texte
+    assert "le tableau n°8 (principaux motifs des rejets) fait défaut" in texte
+    assert "Il conviendrait néanmoins de se conformer" in texte and "et de dater et signer le rapport." in texte
+    assert "la rubrique nouvelle introduite en 2023 (l'analyse de la gestion des risques) n'est pas traitée" in texte
+    assert "« Analyse des marches publics »" in texte
+    assert "  " not in texte and " ," not in texte

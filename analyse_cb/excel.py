@@ -55,6 +55,22 @@ def _ecrire_long(ws, ligne: int, texte: str, derniere_ligne: int | None = None, 
         ws.row_dimensions[ligne].height = hauteur
 
 
+def _ajuster_texte(ws, ligne: int, texte: str, colonnes: str = "ABCDE") -> None:
+    """Hauteur de ligne (et au besoin taille de police) pour qu'un texte rédigé tienne entièrement dans la cellule
+    fusionnée : Excel limite la hauteur d'une ligne à 409 points."""
+    import math
+    largeur = sum(ws.column_dimensions[c].width or 9 for c in colonnes)
+    for taille in (10, 9.5, 9, 8.5, 8):
+        car_par_ligne = largeur * 1.2 * 11 / taille
+        nb = sum(max(1, math.ceil(len(p) / car_par_ligne)) for p in texte.split("\n"))
+        hauteur = nb * taille * 1.35 + 6
+        if hauteur <= 409:
+            break
+    ws.row_dimensions[ligne].height = min(409, hauteur)
+    ws[f"A{ligne}"].font = Font(name="Calibri", size=taille)
+    ws[f"A{ligne}"].alignment = Alignment(wrap_text=True, vertical="top", horizontal="justify")
+
+
 def _hauteur(texte: str, largeur_car: int = 60, mini: float = 18) -> float:
     lignes = sum(max(1, -(-len(p) // largeur_car)) for p in str(texte).split("\n"))
     return max(mini, min(400, 13 * lignes + 4))
@@ -122,16 +138,10 @@ def remplir_modele(res: ResultatAnalyse, sortie: str | Path, modele: str | Path 
     dv_forme.add("C22:C74")
     _mettre_en_forme_statuts(ws, "C22:C74")
 
-    hors_grille = [l for l in res.forme if l.hors_grille]
-    synthese_forme = (f"Taux de conformité de la forme : {res.score_forme:.0f} % – appréciation : "
-                      f"{res.mention(res.score_forme)}.\n")
-    absentes = [l.libelle for l in res.forme if l.statut == NON_CONFORME]
-    if absentes:
-        synthese_forme += "Éléments non conformes : " + "; ".join(absentes) + ".\n"
-    hg_abs = [l.libelle for l in hors_grille if l.statut in (NON_CONFORME,)]
-    if hg_abs:
-        synthese_forme += ("Rubriques du canevas 2023 absentes (hors grille) : " + "; ".join(hg_abs) + ".\n")
-    _ecrire_long(ws, 78, synthese_forme.strip(), hauteur=_hauteur(synthese_forme, 95, 30))
+    from .redaction import appreciation_forme
+    synthese_forme = MENTION_AUTO + "\n" + appreciation_forme(res)
+    _ecrire_long(ws, 78, synthese_forme.strip())
+    _ajuster_texte(ws, 78, synthese_forme.strip())
 
     # ---------------------------------------------------------------- III. fond
     for l in res.fond:
