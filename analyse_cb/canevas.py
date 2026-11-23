@@ -62,7 +62,7 @@ RUBRIQUES: list[Rubrique] = [
                r"\bressources (propres|de l.epn) (proviennent|sont constituees)", r"\bressources? (de l.etablissement|de l.epn) (proviennent|sont|se composent)"),
       titre_requis=False, ligne_forme=27, mots_min=8),
     R("organisation", "Organisation et effectif de l'EPN", 3, "introduction",
-      titres=(r"\borganisation\b", r"\borganigramme\b", r"\beffectifs?\b"),
+      titres=(r"\borganisation\b", r"\borganigramme\b", r"\beffectifs?\b", r"^(les )?organes\b"),
       contenu=(r"\beffectif\b", r"\borganigramme\b", r"\b\d+\s+(agents|salaries|employes|fonctionnaires)\b",
                r"\b(est|sont) (organise|structure)e?s?\b"),
       titre_requis=False, ligne_forme=28, mots_min=8),

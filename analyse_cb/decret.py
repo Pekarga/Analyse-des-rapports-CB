@@ -27,7 +27,9 @@ CONFORME, ECART, A_VERIFIER, INFO = "Conforme", "Écart", "À vérifier", "Infor
 RE_REFERENCE = re.compile(
     r"\b(decret|loi|ordonnance|arrete)\s*(?:n\s*[°o.]?\s*|numero\s*)?((?:19|20)\d\d\s*-\s*\d+(?:\s*/\s*\w+)?)"
     r"(?:\s*du\s*(\d{1,2}\s*(?:er)?\s+\w+\s+(?:19|20)\d\d|\d{1,2}\s*[/.-]\s*\d{1,2}\s*[/.-]\s*(?:19|20)\d\d))?")
-RE_ARTICLE = re.compile(r"^\s*art(?:icle|\.)?\s*(premier|1er|\d+)\s*(?:er)?\s*(?:[:.\-–)]|$)", re.I)
+RE_ARTICLE = re.compile(r"^\s*art(?:icle|\.)?\s*[a-rt-z]?\s*(premier|1er|\d+)\s*(?:er)?\s*(?:[:.\-–)]|$)", re.I)
+# Décret scanné : l'OCR place souvent « Article 12 : » en fin de ligne (numéro dans la marge gauche).
+RE_ARTICLE_FIN = re.compile(r"^(.*\S)\s+art(?:icle|\.)\s*[a-rt-z]?\s*(premier|1er|\d+)\s*(?:er)?\s*:?\s*$", re.I)
 
 # Organes usuels d'un EPN (décret n°2021-677 et textes particuliers)
 ORGANES = [
@@ -39,17 +41,19 @@ ORGANES = [
     ("Comité de trésorerie", r"comite de tresorerie"),
     ("Conseil scientifique / technique", r"conseil (scientifique|technique|pedagogique)"),
     ("Comité de direction", r"comite de direction"),
+    ("Commission consultative", r"commission consultative"),
+    ("Conseil de discipline", r"conseil de discipline"),
 ]
 
 # Catégories de ressources (pour confronter le décret au rapport et au tableau 3)
 CATEGORIES_RESSOURCES = [
     ("Subventions / transferts de l'État", r"subvention|dotation|transferts?|budget (general )?de l.etat|concours de l.etat"),
     ("Ressources propres (prestations, produits, redevances)",
-     r"prestations?|produits?|redevances?|recettes propres|ressources propres|vente|frais|droits|cotisations|"
+     r"prestations?|produits?|redevances?|remuneration|recettes propres|ressources propres|vente|frais|droits|cotisations|"
      r"location|loyers?|honoraires|taxes? parafiscales?|parafiscal"),
     ("Dons et legs", r"\bdons?\b|legs|liberalites"),
     ("Emprunts", r"emprunts?"),
-    ("Concours des partenaires / bailleurs", r"partenaires?|bailleurs?|cooperation|aides? exterieures?|"
+    ("Concours des partenaires / bailleurs", r"partenaires?|bailleurs?|cooperation|(aides?|appuis?) exterieur|"
                                               r"organismes? internationa"),
 ]
 
@@ -67,6 +71,8 @@ class Article:
     numero: str
     texte: str
     items: list[str] = field(default_factory=list)
+    lignes: list[str] = field(default_factory=list)  # lignes brutes (pour les énumérations en cours d'article)
+    premiere: str = ""  # texte porté par la ligne « Article N : … »
 
     @property
     def norm(self) -> str:
@@ -130,27 +136,58 @@ def _decouper_articles(texte: str) -> list[Article]:
     articles: list[Article] = []
     courant: Article | None = None
     from .lecture import RE_PUCE
+    precedente = ""
     for brut in texte.splitlines():
         ligne = brut.strip()
         if not ligne:
             continue
+        fin = RE_ARTICLE_FIN.match(ligne)
+        if fin and not re.search(r"\bl['’]\s*$", fin.group(1), re.I):  # « … de l'article 5 » : simple renvoi
+            ligne = f"Article {fin.group(2)} : " + fin.group(1).lstrip(" :")
         m = RE_ARTICLE.match(ligne)
         if m:
             num = m.group(1).lower()
-            courant = Article("1" if num in ("premier", "1er") else num, ligne[m.end():].strip())
+            courant = Article("1" if num in ("premier", "1er") else num, ligne[m.end():].strip(" :"))
+            courant.premiere = courant.texte
             articles.append(courant)
+            precedente = courant.texte or ":"
             continue
         if courant is None:
             continue
         if re.match(r"^\s*(chapitre|titre|section)\b", ligne, re.I):
             continue
+        ligne = ligne.lstrip(": ")
+        courant.lignes.append(ligne)
+        minuscule = not re.match(r"^[A-ZÉÈÀ0-9«]", ligne)
         if RE_PUCE.match(ligne):
-            courant.items.append(RE_PUCE.sub("", ligne).strip(" ;.,"))
-        elif courant.items and not re.match(r"^[A-ZÉÈ]", ligne):
+            courant.items.append(RE_PUCE.sub("", ligne).strip(" ;.,:"))
+        elif minuscule and re.search(r"[:;]\s*$", precedente):
+            courant.items.append(ligne.strip(" ;.,:"))  # énumération sans tiret (« la rémunération … ; »)
+        elif courant.items and minuscule:
             courant.items[-1] += " " + ligne.strip(" ;.,")  # suite d'un élément d'énumération
         else:
             courant.texte += " " + ligne
+        precedente = ligne
     return articles
+
+
+def _enumeration_apres(art: Article, motif: str) -> list[str]:
+    """Éléments énumérés qui suivent, dans l'article, la phrase correspondant au motif (et s'arrêtent à la
+    phrase suivante commençant par une majuscule)."""
+    from .lecture import RE_PUCE
+    lignes = [art.premiere] + art.lignes
+    for k, l in enumerate(lignes):
+        if re.search(motif, normaliser(l)):
+            items = []
+            for suiv in lignes[k + 1:]:
+                if RE_PUCE.match(suiv) or re.match(r"^[-_–•]+\s*", suiv):
+                    items.append(re.sub(r"^[-_–•\s]+", "", RE_PUCE.sub("", suiv)).strip(" ;.,:"))
+                elif not re.match(r"^[A-ZÉÈÀ«]", suiv):
+                    items.append(suiv.strip(" ;.,:"))
+                else:
+                    break
+            return [i for i in items if len(i) > 3]
+    return []
 
 
 def _enumeration(art: Article) -> list[str]:
@@ -181,10 +218,10 @@ def lire_decret(chemin: str | Path) -> Decret:
 
     # Dénomination et sigle
     m = re.search(r"denomme(?:e)?\s*[«\"“]?\s*([^»\"”,;]{5,150}?)\s*[»\"”]?\s*(?:,|;|\.|\s)\s*(?:en abrege|ci-apres|par abreviation|sigle)"
-                  r"\s*[«\"“(]?\s*([a-z0-9\-]{2,15})", n)
+                  r"\s*[«\"“(]?\s*([a-z0-9](?:[a-z0-9\-]|\.\s?(?=[a-z0-9])){1,24})", n)
     if m:
         d.denomination = _retrouver_casse(texte, m.group(1))
-        d.sigle = m.group(2).upper()
+        d.sigle = re.sub(r"[.\s]", "", m.group(2)).upper()
     else:
         m = re.search(r"(?:creation|portant [^\n]{0,80}?)\s+(?:de l.|du |de la |d.)\s*([^,\n]{5,150}?)\s*,?\s*"
                       r"(?:en abrege|en sigle|ci-apres denomme)\s*[«\"“(]?\s*([a-z0-9\-]{2,15})", n)
@@ -207,10 +244,10 @@ def lire_decret(chemin: str | Path) -> Decret:
     m = re.search(r"tutelle (?:administrative et )?technique (?:du|de la|des)\s+([^.;]{5,120}?)(?:\s+et\s+(?:sous\s+)?(?:la\s+)?tutelle|[.;]|$)", n)
     if m:
         d.tutelle_technique = _retrouver_casse(texte, m.group(1))
-    m = re.search(r"tutelle (?:economique et financiere|financiere|economique)\s+(?:du|de la|des)\s+([^.;]{5,120}?)(?:[.;]|\s+et\s|$)", n)
+    m = re.search(r"tutelle (?:economique et financiere|financiere|economique)\s+(?:du|de la|des)\s+([^.;]{5,120}?)(?:[.;,]|$)", n)
     if m:
         d.tutelle_financiere = _retrouver_casse(texte, m.group(1))
-    m = re.search(r"siege[^.;]{0,40}?(?:est )?(?:fixe|etabli|situe|installe)\s+a\s+([a-z' \-]{3,40}?)(?:[.;,]|\s+il\b|$)", n)
+    m = re.search(r"siege[^;]{0,40}?(?:est )?(?:fixe|etabli|situe|installe)\s+a\s+([a-z' \-]{3,40}?)(?:[.;,]|\s+il\b|$)", n)
     if m:
         d.siege = _retrouver_casse(texte, m.group(1)).strip()
     m = re.search(r"[^.]*\b(antennes?|directions? regionales?|delegations? regionales?|representations? regionales?)\b[^.]*\.", n)
@@ -218,7 +255,15 @@ def lire_decret(chemin: str | Path) -> Decret:
         d.antennes = _retrouver_casse(texte, m.group(0).strip())
 
     # Missions
-    for art in d.articles:
+    for k, art in enumerate(d.articles):
+        suivant = d.articles[k + 1] if k + 1 < len(d.articles) else None
+        if (re.search(r"(a|ont) pour missions?", normaliser(art.texte)) and suivant
+                and re.match(r"^\W*(a ce titre|a cet effet|dans ce cadre)", normaliser(suivant.texte))):
+            principale = re.split(r"(?:a|à|ont) pour missions?\s*(?:de\s*)?:?", art.texte, maxsplit=1, flags=re.I)[-1]
+            items = _enumeration_apres(suivant, r"chargee?|missions?|attributions?") or _enumeration(suivant)
+            d.missions = ([principale.strip(" .")] if len(principale.strip()) > 10 else []) + items
+            break
+    for art in d.articles if not d.missions else []:
         if re.search(r"(a|ont) pour (missions?|attributions?|objet)|est charge(e)? de|missions? (de l|du|suivantes)|"
                      r"attributions suivantes", normaliser(art.texte)):
             items = _enumeration(art)
@@ -243,9 +288,10 @@ def lire_decret(chemin: str | Path) -> Decret:
     d.sessions_conseil_par_an, d.phrase_sessions = _periodicite(texte)
 
     # Ressources
+    motif_res = r"(ressources|recettes)[^:]{0,60}?(comprennent|sont constituees|se composent|proviennent)"
     for art in d.articles:
-        if re.search(r"ressources[^.:]{0,60}(comprennent|sont constituees|se composent|proviennent|sont)", art.norm[:200]):
-            d.ressources = _enumeration(art) or [art.texte.strip()]
+        if re.search(motif_res, art.norm):
+            d.ressources = _enumeration_apres(art, motif_res) or _enumeration(art) or [art.texte.strip()]
             break
     zone = normaliser(" ".join(d.ressources))
     d.categories_ressources = [lib for lib, motif in CATEGORIES_RESSOURCES if re.search(motif, zone)]
@@ -258,14 +304,19 @@ def _retrouver_casse(original: str, norm: str) -> str:
     if not mots:
         return norm
     motif = r"\W+".join(re.escape(m) for m in mots)
-    texte_norm = normaliser(original)
-    # La normalisation conserve la longueur à quelques caractères près : on cherche dans le texte normalisé
-    # puis on reprend la même plage dans le texte normalisé « aligné » sur l'original.
-    aligne = "".join(normaliser(c) or " " for c in original.replace("\n", " "))
-    m = re.search(motif, aligne)
-    if m and len(aligne) == len(original.replace("\n", " ")):
-        return original.replace("\n", " ")[m.start():m.end()].strip(" «»\"“”")
-    return norm if texte_norm else norm
+    # Texte normalisé caractère par caractère, avec la position d'origine de chaque caractère produit
+    # (« œ » donne deux caractères, les accents disparaissent).
+    produits, positions = [], []
+    for i, c in enumerate(original):
+        nc = normaliser(c) if c.strip() else " "
+        for x in nc or " ":
+            produits.append(x)
+            positions.append(i)
+    m = re.search(motif, "".join(produits))
+    if not m:
+        return norm
+    extrait = original[positions[m.start()]:positions[m.end() - 1] + 1]
+    return re.sub(r"\s+", " ", extrait).strip(" «»\"“”")
 
 
 def _periodicite(texte: str) -> tuple[int | None, str]:
@@ -396,6 +447,19 @@ class ConfrontationDecret:
             return
         zone = re.sub(r"\s*-\s*", "-", self.zone_intro)
         num = normaliser(d.numero).replace(" ", "")
+        # Phrase(s) qui présentent le texte de création (« créée par décret n°… ») : le numéro y est vérifié
+        # en priorité, car le bon numéro peut figurer ailleurs (ex. renvoi aux articles du décret).
+        phrases = [p for p in re.split(r"(?<=[.;])\s+", zone)
+                   if re.search(r"\b(cree|creee|creation|institue|instituee|erige|erigee)\b", p) and RE_REFERENCE.search(p)]
+        cites_creation = sorted(set(re.sub(r"\s", "", m.group(2)) for p in phrases for m in RE_REFERENCE.finditer(p)))
+        if cites_creation and num not in cites_creation:
+            ailleurs = num in zone.replace(" ", "")
+            constat = (f"Le rapport présente comme texte de création le n°{', '.join(cites_creation)}, alors que le décret "
+                       f"de création est le n°{d.numero}"
+                       + (" (ce numéro n'apparaît qu'ailleurs dans le rapport : erreur de saisie probable)." if ailleurs else "."))
+            self._point("Référence du texte de création", "texte_creation", d.reference, constat, ECART, "Majeure",
+                        "Texte de création conforme au décret", "fiabilite")
+            return
         if num not in zone.replace(" ", ""):
             cites = sorted(set(re.sub(r"\s", "", m.group(2)) for m in RE_REFERENCE.finditer(zone)
                                if not re.match(r"2021-677|2020-627", re.sub(r"\s", "", m.group(2)))))

@@ -407,3 +407,29 @@ def test_rapport_hors_canevas(tmp_path):
     # copier-coller d'un rapport antérieur
     assert controles["Exercice cité conforme à la période"].constate == "2098"
     assert "Trimestre cité conforme à la période" in controles
+
+
+def test_decret_scanne_mise_en_page_ocr(tmp_path):
+    """Décret lu par OCR : numéros d'articles reportés en fin de ligne, sigle à points, énumérations sans tiret ;
+    rapport citant un mauvais numéro de décret dans la phrase de création."""
+    from analyse_cb.decret import lire_decret
+    decret = tmp_path / "decret.txt"
+    decret.write_text(
+        "Décret n° 2090-589 du 06 octobre 2090 portant création de l'Office d'Essai\n"
+        "Il est créé un Etablissement Public Administratif Article 1 :\n"
+        "dénommé « Office d'Essai », en abrégé O.F.E.S, placé sous la tutelle technique du Ministre des Essais "
+        "et sous la tutelle financière du Ministre du Budget et du Portefeuille de l'Etat.\n"
+        "Article 3 :\nL'O.F.E.S à pour mission de conduire les essais nationaux.\n"
+        "Article d4 :\nA ce titre, l'O.F.E.S est chargé :\n- de planifier les essais ;\n-_ d'en publier les résultats.\n"
+        ": Les recettes et les dépenses sont prévues au budget annuel. Article 25\n"
+        "Les recettes de l'O.F.E.S comprennent notamment :\nla rémunération de ses prestations ;\nle budget de l'Etat ;\n"
+        "les dons et legs.\nLes dépenses concernent les dépenses ordinaires.\n", encoding="utf-8")
+    d = lire_decret(decret)
+    assert d.numero == "2090-589" and d.sigle == "OFES" and d.denomination == "Office d'Essai"
+    assert d.tutelle_financiere == "Ministre du Budget et du Portefeuille de l'Etat"
+    assert [a.numero for a in d.articles] == ["1", "3", "4", "25"]
+    assert d.missions == ["conduire les essais nationaux", "de planifier les essais", "d'en publier les résultats"]
+    assert d.ressources == ["la rémunération de ses prestations", "le budget de l'Etat", "les dons et legs"]
+    r = analyser(_rapport_libre(tmp_path / "libre.docx"), decrets=decret)  # rapport : « décret n°2090-12 »
+    point = next(p for p in r.confrontation.points if p.theme == "Référence du texte de création")
+    assert point.statut == "Écart" and "2090-12" in point.constat
