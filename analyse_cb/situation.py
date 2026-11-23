@@ -29,10 +29,11 @@ from .tableaux import Constat, ControleTableaux, TableauAnalyse
 from .texte import format_montant, format_taux, lire_nombre, normaliser
 
 CONCORDANT, ECART, NON_COMPARABLE = "Concordant", "Écart", "Non comparable"
+ECART_DATE = "Écart (décalage de date)"  # écart qui peut s'expliquer par la date d'arrêté de la situation
 
 # Rôle des colonnes : on teste d'abord les colonnes à ignorer (taux, écarts, disponibles).
 ROLES_COLONNES = [
-    ("ignorer", r"taux|%|ecart|disponible|solde|reste|variation|observation|commentaire"),
+    ("ignorer", r"taux|%|ecart|disponible|solde|reste|variation|observation|commentaire|\bdeng\b|demande|op vise"),
     ("epn", r"^(epn|sigle|etablissement|structure|entite|organisme|code epn|nom epn)\b"),
     ("sens", r"^(sens|type( d.operation)?|recettes? ?/ ?depenses?|r ?/ ?d)$"),
     ("groupe", r"^(nature|categorie|groupe|titre|section|nature de (la )?depense|nature economique|grande nature)$"),
@@ -40,14 +41,20 @@ ROLES_COLONNES = [
     ("modif", r"modif"),
     ("initial", r"initial|primitif|\bvote"),
     ("actuel", r"actuel|final|definiti|revise|corrige|modifie|dotation|credits? ouverts?"),
-    ("engage", r"engag"),
+    ("engage", r"engag|\beng\b"),
     ("liquide", r"liquid"),
-    ("ordonnance", r"ordonnanc|mandat"),
-    ("paye", r"pay|paie|decaiss"),
-    ("recouvre", r"recouvr|encaiss|realis|mobilis|perception|percu"),
+    ("paye", r"pay|paie|decaiss|\bpec\b|pris\w* en charge"),
+    ("ordonnance", r"ordonnanc|mandat|^op\b"),
+    ("recouvre", r"recouvr|encaiss|realis|mobilis|perception|percu|emise?s?\b"),
+    ("vise", r"vise"),
     ("libelle", r"libelle|designation|intitule|nature|activite|rubrique|ressources|recettes|depenses|emplois|compte"),
 ]
-ROLES_MONTANTS = ("initial", "actuel", "engage", "liquide", "ordonnance", "paye", "recouvre", "modif")
+ROLES_MONTANTS = ("initial", "actuel", "engage", "liquide", "ordonnance", "paye", "recouvre", "vise", "modif")
+# Rôles cumulatifs : ils ne peuvent qu'augmenter d'une date à l'autre (contrairement aux prévisions).
+ROLES_EXECUTION = ("engage", "liquide", "ordonnance", "paye", "recouvre", "vise", "realise")
+# Niveaux de la nomenclature SIGOBE d'après la longueur du code en tête de libellé :
+# EPN (8 chiffres) > catégorie (« 1 Personnel », « 01 Ressources… ») > programme (7) > activité (11) > nature (6).
+NIVEAUX_CODE = {8: 0, 1: 1, 2: 1, 7: 2, 11: 3, 6: 4}
 
 GROUPES_DEPENSES = [("personnel", r"personnel|salaires"), ("biens_services", r"biens et services|fonctionnement courant|achats? de biens"),
                     ("transferts", r"transferts?|subventions? (versee|accordee)"), ("investissement", r"investissement|equipement|immobilis")]
@@ -82,6 +89,7 @@ class LigneSituation:
     valeurs: dict[str, float]
     epn: str = ""
     feuille: str = ""
+    activite: str = ""  # activité (11 chiffres) dont relève une ligne de nature économique
 
 
 @dataclass
@@ -92,6 +100,11 @@ class SituationExecution:
     totaux_declares: dict[str, float] = field(default_factory=dict)
     avertissements: list[str] = field(default_factory=list)
     filtre_epn: str = ""
+    fichiers: list[Path] = field(default_factory=list)
+
+    @property
+    def noms_fichiers(self) -> str:
+        return " + ".join(f.name for f in (self.fichiers or [self.chemin]))
 
     def lignes_de(self, sens: str) -> list[LigneSituation]:
         return [l for l in self.lignes if l.sens == sens]
@@ -114,6 +127,8 @@ class SituationExecution:
         poser("recettes_initial", self.somme("recettes", "initial"))
         poser("recettes_final", self.somme("recettes", "actuel"))
         poser("recettes_realise", self.somme("recettes", "recouvre"))
+        poser("recettes_paye", self.somme("recettes", "paye"))
+        poser("depenses_paye", self.somme("depenses", "paye"))
         poser("ressources_propres_final", self.somme("recettes", "actuel", "propres"))
         poser("ressources_propres_realise", self.somme("recettes", "recouvre", "propres"))
         poser("depenses_initial", self.somme("depenses", "initial"))
@@ -267,6 +282,7 @@ def extraire_situation(source: SourceSituation, nom_epn: str = "", fiche: FicheE
                 roles["libelle"] = libre[0]
         sens_table = _sens_table(table.nom, roles, table.lignes)
         groupe_courant = ""
+        candidats: list[tuple[int | None, LigneSituation, tuple]] = []
         for brut in table.lignes[i0 + nb:]:
             cell = lambda r: brut[roles[r]] if r in roles and roles[r] < len(brut) else None  # noqa: E731
             libelle = str(cell("libelle") or "").strip()
@@ -302,13 +318,33 @@ def extraire_situation(source: SourceSituation, nom_epn: str = "", fiche: FicheE
                 continue
             if sens is None:
                 continue
+            niveau = _niveau(libelle, cell("code"))
+            if niveau == 1:  # catégorie chiffrée (« 2 Biens et services | 400 000 000 … »)
+                groupe_courant = _groupe(sens, libelle, "") or groupe_courant
             groupe = _groupe(sens, str(cell("groupe") or ""), "") if "groupe" in roles else ""
             groupe = groupe or groupe_courant or _groupe(sens, libelle, code)
             cle = (sens, code or n_lib, tuple(sorted(vals.items())))
+            candidats.append((niveau, LigneSituation(sens, code, libelle, groupe, vals, sit.filtre_epn, table.nom), cle))
+        # Nomenclature hiérarchique (SIGOBE) : seules les lignes de dernier niveau sont retenues, sinon les
+        # montants de l'EPN, des catégories, programmes et activités seraient comptés plusieurs fois.
+        avec_niveau = [n for n, _, _ in candidats if n is not None]
+        hierarchique = len(set(avec_niveau)) >= 2 and len(avec_niveau) >= 0.8 * len(candidats)
+        activite = ""
+        for k, (niveau, ligne, cle) in enumerate(candidats):
+            if hierarchique:
+                if niveau is not None and niveau <= 2:
+                    activite = ""
+                elif niveau == 3:
+                    activite = ligne.code
+                suivant = next((n for n, _, _ in candidats[k + 1:] if n is not None), None)
+                if niveau is not None and suivant is not None and suivant > niveau:
+                    continue  # ligne de regroupement
+                ligne.activite = activite if niveau == 4 else ""
+            cle = cle + (ligne.activite,)
             if cle in vus:
                 continue  # même ligne reprise dans une autre feuille
             vus.add(cle)
-            sit.lignes.append(LigneSituation(sens, code, libelle, groupe, vals, sit.filtre_epn, table.nom))
+            sit.lignes.append(ligne)
     if valeurs_epn and not sit.lignes:
         sit.avertissements.append(
             "Situation d'exécution consolidée : aucune ligne pour cet EPN (valeurs trouvées : "
@@ -319,6 +355,11 @@ def extraire_situation(source: SourceSituation, nom_epn: str = "", fiche: FicheE
     return sit
 
 
+def _niveau(libelle: str, code_colonne=None) -> int | None:
+    m = re.match(r"^\s*(\d+)\b", str(code_colonne or "") or libelle) or re.match(r"^\s*(\d+)\b", libelle)
+    return NIVEAUX_CODE.get(len(m.group(1))) if m else None
+
+
 def _date_arrete(source: SourceSituation) -> date | None:
     morceaux = [source.texte, source.chemin.stem.replace("_", " ")]
     for t in source.tables:
@@ -326,7 +367,7 @@ def _date_arrete(source: SourceSituation) -> date | None:
         for l in t.lignes[:8]:
             morceaux.extend(str(v) for v in l if v not in (None, ""))
     texte = normaliser(" ".join(morceaux))
-    m = re.search(r"(?:au|arretee?\s+au|a la date du|fin|jusqu.au|periode du .{0,25}? au)\s+"
+    m = re.search(r"(?:au|arretee?\s+au|a la date du|fin|jusqu.au|periode du .{0,25}? au|date comptable\s*:?)\s+"
                   r"(\d{1,2}\s*(?:er)?\s+[a-z]+\s+(?:19|20)\d\d|\d{1,2}\s*[/.-]\s*\d{1,2}\s*[/.-]\s*(?:19|20)\d\d)", texte)
     if m:
         return lire_date(m.group(1))
@@ -341,18 +382,43 @@ def situation_pour(sources: list[SourceSituation], nom_epn: str, fiche: FicheEPN
     m = re.search(r"\(([A-Z0-9\-]{2,12})\)", nom_epn or "")
     if m:
         cibles.append(normaliser(m.group(1)))
-    candidats = []
+    sans_sigle = re.sub(r"\s*\([^)]*\)\s*", " ", nom_epn or "").strip()
+    if sans_sigle:
+        cibles.append(normaliser(sans_sigle))
+    candidats, trouvees = [], []
     for src in sources:
         sit = extraire_situation(src, nom_epn, fiche)
         if sit.filtre_epn and sit.lignes:
-            return sit  # fichier consolidé : lignes de l'EPN trouvées
+            trouvees.append(sit)  # fichier consolidé : lignes de l'EPN trouvées
+            continue
         zone = normaliser(src.chemin.stem.replace("_", " ") + " " + src.texte + " " + " ".join(t.nom for t in src.tables))
         if any(c and re.search(r"\b" + re.escape(c) + r"\b", zone) for c in cibles):
-            return sit
-        candidats.append(sit)
-    if unique and len(sources) == 1:
-        return candidats[0] if candidats else None
-    return None
+            trouvees.append(sit)
+        else:
+            candidats.append(sit)
+    if not trouvees and unique and len(sources) == 1:
+        trouvees = candidats
+    return fusionner(trouvees) if trouvees else None
+
+
+def fusionner(situations: list[SituationExecution]) -> SituationExecution:
+    """Réunit les situations d'un même EPN fournies en plusieurs fichiers (ex. recettes et annexe des dépenses)."""
+    if len(situations) == 1:
+        situations[0].fichiers = [situations[0].chemin]
+        return situations[0]
+    dates = sorted({s.date_arrete for s in situations if s.date_arrete})
+    res = SituationExecution(situations[0].chemin, dates[0] if dates else None,
+                             fichiers=[s.chemin for s in situations])
+    for s in situations:
+        res.lignes += s.lignes
+        for k, v in s.totaux_declares.items():
+            res.totaux_declares.setdefault(k, v)
+        res.avertissements += s.avertissements
+        res.filtre_epn = res.filtre_epn or s.filtre_epn
+    if len(dates) > 1:
+        res.avertissements.append("Les fichiers de situation n'ont pas la même date d'arrêté : "
+                                  + ", ".join(f"{d:%d/%m/%Y}" for d in dates) + ".")
+    return res
 
 
 # ------------------------------------------------------------------ rapprochement
@@ -365,6 +431,7 @@ class LigneRapprochement:
     statut: str
     taux: bool = False
     code: str = ""
+    note: str = ""
 
     @property
     def ecart(self) -> float | None:
@@ -428,28 +495,51 @@ class Rapprochement:
                 f"au {self.periode.fin:%d/%m/%Y} : les écarts éventuels peuvent provenir de ce décalage.",
                 "Information", "coherence", attendu=f"{self.periode.fin:%d/%m/%Y}", constate=f"{d:%d/%m/%Y}"))
 
-    def _comparer(self, libelle, code_tab, cle_rap, cle_sit, rubrique, valeur_rap=None, taux=False):
+    def _evaluer(self, v_rap: float, v_sit: float, execution: bool, taux: bool = False) -> tuple[str, str, str]:
+        """Statut, gravité et explication d'une comparaison, compte tenu de la date d'arrêté de la situation.
+
+        Les montants d'exécution sont cumulés : à une date postérieure à la période, la situation ne peut pas être
+        inférieure au rapport (et inversement à une date antérieure)."""
+        tol = 0.05 if taux else 1.0
+        if abs(v_rap - v_sit) <= tol:
+            return CONCORDANT, "", ""
+        rel = abs(v_rap - v_sit) / abs(v_sit) if v_sit else 1
+        d, fin = self.sit.date_arrete, self.periode.fin
+        if self.date_conforme is False and d and execution and not taux:
+            posterieure = d > fin
+            if (v_rap > v_sit) == posterieure:
+                return ECART, "Majeure", (
+                    f"montant impossible : la situation arrêtée au {d:%d/%m/%Y}, {'postérieure' if posterieure else 'antérieure'} "
+                    f"à la fin de la période, est {'inférieure' if posterieure else 'supérieure'} au rapport alors que les "
+                    "montants d'exécution sont cumulés")
+            return ECART_DATE, "Information", f"écart compatible avec le décalage de date (situation au {d:%d/%m/%Y})"
+        if self.date_conforme is False:
+            return ECART, "Mineure", f"à confirmer : situation arrêtée au {d:%d/%m/%Y}" if d else ""
+        majeure = rel > 0.01 or (taux and abs(v_rap - v_sit) > 1)
+        return ECART, "Majeure" if majeure else "Mineure", ""
+
+    def _comparer(self, libelle, code_tab, cle_rap, cle_sit, rubrique, valeur_rap=None, taux=False, execution=None):
         tab = self.t.par_code.get(code_tab) if code_tab else None
         v_rap = valeur_rap if valeur_rap is not None else self.agregats_rap.get(cle_rap)
         v_sit = self.agregats_sit.get(cle_sit) if isinstance(cle_sit, str) else cle_sit
         nom = tab.nom if tab else (code_tab or "Rapport")
+        if execution is None:
+            execution = isinstance(cle_sit, str) and cle_sit.rsplit("_", 1)[-1] in ROLES_EXECUTION
         if v_rap is None or v_sit is None:
             if v_sit is not None:
                 self.lignes.append(LigneRapprochement(libelle, nom, v_rap, v_sit, NON_COMPARABLE, taux))
             return
-        tol = 0.05 if taux else 1.0
-        ok = abs(v_rap - v_sit) <= tol
-        self.lignes.append(LigneRapprochement(libelle, nom, v_rap, v_sit, CONCORDANT if ok else ECART, taux))
-        if ok:
+        statut, gravite, note = self._evaluer(v_rap, v_sit, execution, taux)
+        self.lignes.append(LigneRapprochement(libelle, nom, v_rap, v_sit, statut, taux, note=note))
+        if statut == CONCORDANT:
             return
         rel = abs(v_rap - v_sit) / abs(v_sit) if v_sit else 1
-        gravite = "Majeure" if (rel > 0.01 or (taux and abs(v_rap - v_sit) > 1)) and self.date_conforme is not False else "Mineure"
         fmt = format_taux if taux else format_montant
         self.constats.append(Constat(
             rubrique, "Concordance avec la situation d'exécution",
             f"{libelle} : {fmt(v_rap)} dans le rapport ({nom}) contre {fmt(v_sit)} dans la situation d'exécution "
-            f"(écart {fmt(v_rap - v_sit)}" + ("" if taux else f", soit {rel * 100:.2f} %".replace(".", ",")) + ")."
-            + (" [OCR]" if self.ocr else ""),
+            f"(écart {fmt(v_rap - v_sit)}" + ("" if taux else f", soit {rel * 100:.2f} %".replace(".", ",")) + ")"
+            + (f" – {note}" if note else "") + "." + (" [OCR]" if self.ocr else ""),
             gravite, "fiabilite", nom if tab else "", attendu=fmt(v_sit), constate=fmt(v_rap)))
 
     def _agregats(self) -> None:
@@ -469,6 +559,11 @@ class Rapprochement:
             self._comparer("Emplois – montant actuel", "T4", None, "depenses_actuel", "pres_emplois",
                            valeur_rap=t4.total("actuel"))
         self._comparer("Engagements", "T6", "depenses_engage", "depenses_engage", "exec_depenses")
+        t5, t6 = self.t.par_code.get("T5"), self.t.par_code.get("T6")
+        if t5 and "paye" in t5.colonnes:
+            self._comparer("Recettes prises en charge", "T5", None, "recettes_paye", "exec_recettes", valeur_rap=t5.total("paye"))
+        if t6 and "paye" in t6.colonnes:
+            self._comparer("Dépenses prises en charge", "T6", None, "depenses_paye", "exec_depenses", valeur_rap=t6.total("paye"))
         self._comparer("Ordonnancements", "T6", "depenses_realise", "depenses_realise", "exec_depenses")
         for g in ("personnel", "biens_services", "transferts", "investissement"):
             self._comparer(f"Ordonnancements – {LIBELLES_GROUPES[g]}", "T6", f"{g}_realise", f"{g}_realise", "exec_depenses")
@@ -489,11 +584,20 @@ class Rapprochement:
 
     def _detail(self) -> None:
         """Rapprochement ligne à ligne, par code (nature économique ou activité)."""
-        for code_tab, sens, paires in (("T5", "recettes", (("final", "actuel"), ("realise", "recouvre"))),
+        for code_tab, sens, paires in (("T5", "recettes", (("final", "actuel"), ("realise", "recouvre"), ("paye", "paye"))),
                                        ("T6", "depenses", (("actuel", "actuel"), ("engage", "engage"),
-                                                           ("realise", "ordonnance")))):
+                                                           ("realise", "ordonnance"), ("paye", "paye")))):
             tab = self.t.par_code.get(code_tab)
-            lignes_sit = {l.code: l for l in self.sit.lignes_de(sens) if l.code}
+            lignes_sit: dict[str, LigneSituation] = {l.code: l for l in self.sit.lignes_de(sens) if l.code}
+            # Lignes de nature regroupées par activité (le rapport présente les dépenses par activité)
+            for l in self.sit.lignes_de(sens):
+                if l.activite:
+                    cumul = lignes_sit.setdefault(l.activite, LigneSituation(sens, l.activite, f"Activité {l.activite}",
+                                                                             l.groupe, {}))
+                    for r, v in l.valeurs.items():
+                        cumul.valeurs[r] = cumul.valeurs.get(r, 0.0) + v
+            if any(l.activite for l in self.sit.lignes_de(sens)):
+                lignes_sit = {c: l for c, l in lignes_sit.items() if len(c) == 11 or not l.activite}
             if not tab or not lignes_sit:
                 continue
             lignes_rap = {}
@@ -501,14 +605,15 @@ class Rapprochement:
                 if l.type == "ligne":
                     c = _code(l.libelle)
                     if c:
-                        lignes_rap[c] = l
+                        lignes_rap.setdefault(c, l)  # code en double : la première ligne est retenue
             if not lignes_rap:
                 continue
             ecarts = []
             for c, lr in lignes_rap.items():
                 ls = lignes_sit.get(c)
                 if not ls:
-                    self.codes_absents_situation.append(f"{code_tab} {c}")
+                    if any(abs(v) > 0 for v in lr.valeurs.values()):
+                        self.codes_absents_situation.append(f"{code_tab} {c} – {lr.libelle[:60]}")
                     continue
                 for role_rap, role_sit in paires:
                     if role_sit == "ordonnance" and "ordonnance" not in ls.valeurs:
@@ -516,25 +621,30 @@ class Rapprochement:
                     v_rap, v_sit = lr.valeurs.get(role_rap), ls.valeurs.get(role_sit)
                     if v_rap is None or v_sit is None:
                         continue
-                    ok = abs(v_rap - v_sit) <= 1
+                    statut, gravite, note = self._evaluer(v_rap, v_sit, role_sit in ROLES_EXECUTION)
                     lr_obj = LigneRapprochement(f"{lr.libelle[:70]} – {_LIB_ROLE[role_rap]}", tab.nom, v_rap, v_sit,
-                                                CONCORDANT if ok else ECART, code=c)
+                                                statut, code=c, note=note)
                     self.detail.append(lr_obj)
-                    if not ok:
-                        ecarts.append(lr_obj)
+                    if statut == ECART:
+                        ecarts.append((lr_obj, gravite))
             self.codes_absents_rapport += [f"{code_tab} {c} – {l.libelle[:60]}" for c, l in lignes_sit.items()
                                            if c not in lignes_rap and any(abs(v) > 0 for v in l.valeurs.values())]
-            if ecarts:
+            for gravite in ("Majeure", "Mineure"):
+                liste = [e for e, g in ecarts if g == gravite]
+                if not liste:
+                    continue
                 self.constats.append(Constat(
                     "exec_recettes" if sens == "recettes" else "exec_depenses",
                     "Concordance des lignes avec la situation d'exécution",
-                    f"{len(ecarts)} montant(s) du {tab.nom} diffère(nt) de la situation d'exécution, ex. : "
-                    + " ; ".join(f"{e.code} {e.libelle.split(' – ')[-1]} {format_montant(e.rapport)} contre "
-                                 f"{format_montant(e.situation)}" for e in ecarts[:3]) + ("…" if len(ecarts) > 3 else "."),
-                    "Mineure", "fiabilite", tab.nom, attendu="situation d'exécution", constate=f"{len(ecarts)} écart(s)"))
+                    f"{len(liste)} montant(s) du {tab.nom} diffère(nt) de la situation d'exécution"
+                    + (" (montants d'exécution impossibles compte tenu de la date de la situation)" if any("impossible" in e.note for e in liste) else "")
+                    + " : " + " ; ".join(f"{e.code} {e.libelle.split(' – ')[-1]} {format_montant(e.rapport)} contre "
+                                         f"{format_montant(e.situation)}" for e in liste[:4]) + ("…" if len(liste) > 4 else "."),
+                    gravite, "fiabilite", tab.nom, attendu="situation d'exécution", constate=f"{len(liste)} écart(s)"))
 
 
-_LIB_ROLE = {"final": "prévision finale", "actuel": "budget actuel", "realise": "réalisation", "engage": "engagements"}
+_LIB_ROLE = {"final": "prévision finale", "actuel": "budget actuel", "realise": "réalisation", "engage": "engagements",
+             "paye": "prises en charge"}
 
 
 def _code(valeur) -> str:

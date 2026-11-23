@@ -332,7 +332,7 @@ def ajouter_onglets_detail(wb: Workbook, res: ResultatAnalyse) -> None:
         ("Décret de création et d'organisation",
          (f"{res.decret.reference} ({res.decret.chemin.name}) – " if res.decret else "") + res.appreciation_decret),
         ("Situation d'exécution",
-         (f"{res.situation.chemin.name} – " if res.situation else "") + res.appreciation_situation),
+         (f"{res.situation.noms_fichiers} – " if res.situation else "") + res.appreciation_situation),
         ("Suite à donner (proposition)", suite_a_donner(res)),
     ]
     for i, (k, v) in enumerate(infos, start=3):
@@ -430,6 +430,7 @@ def ajouter_onglets_detail(wb: Workbook, res: ResultatAnalyse) -> None:
 
 
 _COULEURS_REF = {"Conforme": VERT, "Concordant": VERT, "Écart": ROUGE, "À vérifier": ORANGE, "Information": GRIS,
+                 "Écart (décalage de date)": ORANGE,
                  "Non comparable": GRIS}
 
 
@@ -483,7 +484,7 @@ def _onglet_situation(wb: Workbook, res: ResultatAnalyse) -> None:
                "conforme à la fin de la période" if rap.date_conforme else
                f"différente de la fin de la période ({res.periode.fin:%d/%m/%Y})")
     i = _bloc_infos(ws, 4, [
-        ("Fichier", sit.chemin.name + (f" (lignes de l'EPN « {sit.filtre_epn} »)" if sit.filtre_epn else "")),
+        ("Fichier(s)", sit.noms_fichiers + (f" (lignes de l'EPN « {sit.filtre_epn} »)" if sit.filtre_epn else "")),
         ("Date d'arrêté", (f"{sit.date_arrete:%d/%m/%Y} – {date_ok}" if sit.date_arrete else "non trouvée – à vérifier")),
         ("Lignes lues", f"{len(sit.lignes_de('recettes'))} ligne(s) de recettes, {len(sit.lignes_de('depenses'))} ligne(s) de dépenses"),
         ("Synthèse", res.appreciation_situation),
@@ -492,10 +493,10 @@ def _onglet_situation(wb: Workbook, res: ResultatAnalyse) -> None:
         return
     ws.cell(i, 1, "Rapprochement des agrégats").font = Font(bold=True, size=12, color="1F4E78")
     _entetes(ws, i + 1, ["Agrégat", "Tableau du rapport", "Montant du rapport", "Montant de la situation", "Écart (rapport − situation)",
-                         "Statut"], [55, 45, 20, 22, 22, 15])
+                         "Statut", "Explication"], [55, 45, 20, 22, 22, 15, 60])
     k = i + 2
     for l in rap.lignes:
-        _ligne(ws, k, [l.libelle, l.tableau, l.rapport, l.situation, l.ecart, l.statut])
+        _ligne(ws, k, [l.libelle, l.tableau, l.rapport, l.situation, l.ecart, l.statut, l.note])
         for col in (3, 4, 5):
             ws.cell(k, col).number_format = "# ##0"
             if l.taux and ws.cell(k, col).value is not None:
@@ -506,11 +507,11 @@ def _onglet_situation(wb: Workbook, res: ResultatAnalyse) -> None:
     k += 1
     ws.cell(k, 1, "Rapprochement ligne à ligne (par code)").font = Font(bold=True, size=12, color="1F4E78")
     _entetes(ws, k + 1, ["Ligne (code – libellé – montant)", "Tableau du rapport", "Montant du rapport", "Montant de la situation",
-                         "Écart (rapport − situation)", "Statut"], [55, 45, 20, 22, 22, 15])
+                         "Écart (rapport − situation)", "Statut", "Explication"], [55, 45, 20, 22, 22, 15, 60])
     k += 2
-    detail = sorted(rap.detail, key=lambda l: l.statut != "Écart")
+    detail = sorted(rap.detail, key=lambda l: (l.statut != "Écart", l.statut != "Écart (décalage de date)"))
     for l in detail:
-        _ligne(ws, k, [l.libelle, l.tableau, l.rapport, l.situation, l.ecart, l.statut])
+        _ligne(ws, k, [l.libelle, l.tableau, l.rapport, l.situation, l.ecart, l.statut, l.note])
         for col in (3, 4, 5):
             ws.cell(k, col).number_format = "# ##0"
         ws.cell(k, 6).fill = PatternFill("solid", fgColor=_COULEURS_REF.get(l.statut, "FFFFFF"))

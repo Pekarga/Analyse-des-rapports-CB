@@ -530,7 +530,7 @@ def _references(res: ResultatAnalyse, code: str, fiab: str, coh: str, com: str) 
             com = f"Décret – {conf.commentaire(code)} " + com
     rap = res.rapprochement
     if rap:
-        ecarts = [c for c in rap.constats if c.rubrique == code and c.nature == "fiabilite"]
+        ecarts = [c for c in rap.constats if c.rubrique == code and c.nature == "fiabilite" and c.gravite != "Information"]
         lignes = {"exec_recettes": ("T5",), "exec_depenses": ("T6",), "pres_ressources": ("T3",),
                   "pres_emplois": ("T4",), "resultat_budgetaire": ("",)}.get(code)
         if ecarts:

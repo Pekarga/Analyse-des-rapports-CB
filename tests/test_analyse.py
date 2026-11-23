@@ -433,3 +433,49 @@ def test_decret_scanne_mise_en_page_ocr(tmp_path):
     r = analyser(_rapport_libre(tmp_path / "libre.docx"), decrets=decret)  # rapport : « décret n°2090-12 »
     point = next(p for p in r.confrontation.points if p.theme == "Référence du texte de création")
     assert point.statut == "Écart" and "2090-12" in point.constat
+
+
+def test_situation_sigobe_hierarchique_date_posterieure(rapports, tmp_path):
+    """Situation au format SIGOBE : EPN > catégorie > programme > activité > nature (en-têtes répétés à chaque
+    page), arrêtée un mois après la fin de la période."""
+    import openpyxl
+    from generer_exemple import EMPLOIS, TAUX_EXECUTION
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["Situation d'exécution Annexe EPN"])
+    ws.append(["Date Comptable : 31/07/2099"])
+    ws.append(["", "Voté", "Actuel (A)", "Deng Saisie (B)", "Eng ViseCf", "OP Emis", "OP Visecf", "OP PEC", "Disponible (A-B)"])
+    lignes, categorie = [], None
+    for lib, v in EMPLOIS:
+        if v is None:
+            categorie = lib
+        elif isinstance(v, tuple):
+            code = lib.split()[0]
+            act = v[0] + v[1]
+            op = round(act * TAUX_EXECUTION[code]) + (-5_000_000 if code == "90047300020" else 1_000_000)
+            lignes.append((categorie, lib, [v[0], act, op, op, op, op, op, act - op]))
+    total = [sum(x[2][k] for x in lignes) for k in range(8)]
+    ws.append(["32099000 Agence Nationale d'Exemple"] + total)
+    for cat in dict.fromkeys(c for c, _, _ in lignes):
+        sous = [x for x in lignes if x[0] == cat]
+        ws.append([cat] + [sum(x[2][k] for x in sous) for k in range(8)])
+        ws.append(["2613101 Mettre en oeuvre les missions du programme"] + [sum(x[2][k] for x in sous) for k in range(8)])
+        for _, lib, vals in sous:
+            ws.append([lib] + vals)
+            ws.append(["601100 Achats de petits matériels"] + vals)
+    ws.append(["TOTAL"] + total)
+    chemin = tmp_path / "Situation_annexe_EPN_31_07_2099.xlsx"
+    wb.save(chemin)
+    r = analyser(rapports["conforme"], situations=chemin)
+    sit = r.situation
+    assert sit.date_arrete == date(2099, 7, 31)
+    assert len(sit.lignes) == 6 and all(l.activite for l in sit.lignes)  # seules les natures sont retenues
+    assert sit.agregats()["depenses_actuel"] == 1_240_000_000  # pas de double comptage des regroupements
+    rap = r.rapprochement
+    assert rap.date_conforme is False
+    lignes = {(l.code, l.libelle.split(" – ")[-1]): l for l in rap.detail}
+    assert lignes[("90047300020", "réalisation")].statut == "Écart"  # rapport > situation postérieure : impossible
+    assert "impossible" in lignes[("90047300020", "réalisation")].note
+    assert lignes[("90047390002", "réalisation")].statut == "Écart (décalage de date)"
+    assert lignes[("90047390002", "budget actuel")].statut == "Concordant"
+    assert any(c.gravite == "Majeure" and "impossibles" in c.message for c in rap.constats)
