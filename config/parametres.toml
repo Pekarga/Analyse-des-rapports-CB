@@ -22,3 +22,8 @@ passable = 50
 retour_cb_si_score_forme_inferieur_a = 75
 # … ou si le nombre d'anomalies majeures atteint ce nombre.
 retour_cb_si_anomalies_majeures = 3
+
+[analyse]
+# true : le fichier d'analyse est produit sous forme définitive (statuts tranchés, sans mention « à valider »).
+# false : mode brouillon (statuts « À vérifier » / « À apprécier » laissés à l'appréciation du Chargé d'Études).
+validation_directe = true

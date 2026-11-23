@@ -6,11 +6,11 @@ Cet outil automatise l'analyse des rapports périodiques des Contrôleurs Budgé
 2. le **décret de création et d'organisation** de chaque EPN (PDF texte ou scanné, Word ou texte) ;
 3. la **situation d'exécution du budget** à la date de la période du rapport (Excel, CSV, PDF ou Word), qui sert de donnée de référence.
 
-Tous les résultats sont reportés dans le **fichier d'analyse de la DCB** (`modeles/Fichier_analyse_des_rapports_des_CB.xlsx`), que l'outil pré-remplit. Un **référentiel des EPN** (`config/referentiel_epn.csv`) complète l'identification des EPN.
+Tous les résultats sont reportés dans le **fichier d'analyse de la DCB** (`modeles/Fichier_analyse_des_rapports_des_CB.xlsx`), que l'outil remplit. Un **référentiel des EPN** (`config/referentiel_epn.csv`) complète l'identification des EPN.
 
 À partir d'un rapport au format Word (.docx) ou PDF, l'outil produit le fichier d'analyse rempli. Le Chargé d'Études n'a plus qu'à le relire, l'ajuster et le compléter. Le décret et la situation d'exécution sont facultatifs : sans eux, l'analyse porte sur le canevas seul.
 
-> L'outil prépare l'analyse, il ne remplace pas le Chargé d'Études. Tout ce qui est rempli automatiquement est signalé comme « à valider ». Les rubriques qui demandent un jugement qualitatif sont marquées **« À apprécier »**.
+> Par défaut, le fichier d'analyse est produit sous **forme définitive** (validation directe) : tous les statuts de la grille sont tranchés et les appréciations sont rédigées sans mention « à valider ». Pour revenir à un mode brouillon (statuts « À vérifier » / « À apprécier » laissés au Chargé d'Études, mention « Pré-rempli automatiquement »), indiquez `validation_directe = false` dans `config/parametres.toml`.
 
 ## Ce qui est automatisé
 
@@ -25,7 +25,7 @@ Tous les résultats sont reportés dans le **fichier d'analyse de la DCB** (`mod
 | **Situation d'exécution** | Lecture de la situation (feuilles « Recettes » / « Dépenses » ou fichier unique ; colonnes reconnues d'après leur intitulé). Un fichier **consolidé** (colonne « EPN » ou « Sigle ») est filtré sur l'EPN du rapport. Contrôle de la date d'arrêté (= fin de la période). Rapprochement **à l'unité près** des tableaux 3 à 6 avec la situation : prévisions initiales et finales, recouvrements, ressources propres, budget actuel, ordonnancements par grande nature (personnel, biens et services, transferts, investissements), taux de réalisation et d'exécution, résultat budgétaire, puis **ligne à ligne** par code (nature économique ou activité). Un écart rend la rubrique « Non fiable » dans la partie III. |
 | **V. Appréciation générale** | Projet d'appréciation (points forts, insuffisances, recommandations au CB) et proposition de suite à donner (retour au CB ou rapport exploitable). |
 
-Le fichier produit contient aussi des onglets de détail : **Synthèse auto**, **Contrôle structure** (toutes les rubriques du canevas 2023, y compris celles absentes de la grille), **Contrôles automatiques** (chaque anomalie avec la valeur attendue et la valeur constatée), **Ratios**, **Difficultés-Suggestions**, **Décret de création** (éléments lus dans le décret et points de contrôle), **Situation d'exécution** (rapprochement des agrégats et des lignes, données retenues) et **Tableaux extraits** (pour vérifier la lecture des tableaux).
+Le fichier produit contient aussi des onglets de détail : **Synthèse**, **Contrôle structure** (toutes les rubriques du canevas 2023, y compris celles absentes de la grille), **Contrôles automatiques** (chaque anomalie avec la valeur attendue et la valeur constatée), **Ratios**, **Difficultés-Suggestions**, **Décret de création** (éléments lus dans le décret et points de contrôle), **Situation d'exécution** (rapprochement des agrégats et des lignes, données retenues) et **Tableaux extraits** (pour vérifier la lecture des tableaux).
 
 Quand plusieurs rapports sont analysés ensemble, un **tableau de bord consolidé** récapitule tous les EPN : délais, taux de conformité, rubriques absentes, anomalies, conformité au décret, concordance avec la situation d'exécution et suite à donner.
 

@@ -1,6 +1,6 @@
 """Rédaction, dans un style administratif, des appréciations générales du fichier d'analyse.
 
-Les textes produits sont des projets : ils restent à relire et à valider par le Chargé d'Études.
+Les textes sont produits sous forme définitive (validation directe) ; en mode brouillon, ils restent à relire.
 """
 from __future__ import annotations
 
@@ -150,7 +150,8 @@ def appreciation_forme(res) -> str:
 
     # 2. Structuration
     presentes = [PARTIES[c] for c in PARTIES if c in lignes and lignes[c].statut in (CONFORME, A_VERIFIER)]
-    absentes = [PARTIES[c] for c in PARTIES if c in lignes and lignes[c].statut == NON_CONFORME]
+    absentes = [PARTIES[c] for c in PARTIES if c in lignes and lignes[c].statut == NON_CONFORME
+                and not res.structure[c].trouvee]
     struct = ""
     if presentes:
         struct = f"Sur le plan de la structuration, le rapport comporte {enumerer(presentes)}."
@@ -166,7 +167,8 @@ def appreciation_forme(res) -> str:
         parent = rub.parent if rub.niveau == 2 else PAR_CODE[rub.parent].parent or rub.parent
         if l.statut == NON_CONFORME and "mais rubrique non renseignée" in l.precision:
             vides.append(_guillemets(rub.libelle))
-        elif l.statut == NON_CONFORME and lignes.get(parent) and lignes[parent].statut != NON_CONFORME:
+        elif (l.statut == NON_CONFORME and l.precision.startswith("Rubrique absente") and lignes.get(parent)
+              and lignes[parent].statut != NON_CONFORME):
             manquantes.setdefault(rub.parent, []).append(rub.code)
         if "peu développée" in l.precision:
             peu.append(_guillemets(rub.libelle))
@@ -210,8 +212,8 @@ def appreciation_forme(res) -> str:
 
     # 3. Tableaux
     codes = sorted(TABLEAU_PAR_CODE)
-    presents = [c for c in codes if c in lignes and lignes[c].statut in (CONFORME, A_VERIFIER)]
-    tab_absents = [c for c in codes if c in lignes and lignes[c].statut == NON_CONFORME]
+    presents = [c for c in codes if c in res.tableaux.par_code]
+    tab_absents = [c for c in codes if c not in res.tableaux.par_code]
     tabl = (f"S'agissant de la présentation des données chiffrées, {nombre(len(presents))} des huit (08) tableaux "
             f"prescrits par le canevas {'sont produits' if len(presents) > 1 else 'est produit'}")
     if tab_absents:
@@ -458,16 +460,15 @@ def appreciation_fond(res) -> str:
             constats_sit.append(f"{nombre(len(autres))} montants par ligne ne concordent pas avec la situation de référence")
         p += (" ; il fait toutefois apparaître que " + enumerer(constats_sit) + "." if constats_sit else ".")
         if rap.date_conforme is False and d:
-            p += (f" Cette situation n'étant pas arrêtée à la date de fin de période ({res.periode.fin:%d/%m/%Y}), les "
-                  "écarts de faible ampleur demeurent à confirmer.")
+            p += (f" Cette situation étant arrêtée à une date postérieure à la fin de la période ({res.periode.fin:%d/%m/%Y}), "
+                  "les écarts d'exécution inférieurs à la situation de référence n'ont pas été retenus comme des erreurs.")
         paragraphes.append(p)
 
     # Rubriques non appréciables
     absentes = [_guillemets(l.libelle.strip(" -")) for l in res.fond if l.ligne and l.fiabilite == "Non renseigné"]
     if absentes:
         paragraphes.append(f"Enfin, {nombre(len(absentes), True)} rubriques étant absentes ou non renseignées, "
-                           "leur fond n'a pu être apprécié ; les rubriques présentes appellent par ailleurs une "
-                           "appréciation qualitative du Chargé d'Études.")
+                           "leur fond n'a pu être apprécié.")
     return "\n".join(paragraphes)
 
 
@@ -516,8 +517,9 @@ def appreciation_generale(res) -> str:
 
     # Insuffisances
     faibles = []
-    nb_rub = sum(1 for l in res.forme if l.statut == NON_CONFORME and l.code in PAR_CODE and not PAR_CODE[l.code].cas_echeant)
-    nb_tab = sum(1 for c in TABLEAU_PAR_CODE if c in lignes and lignes[c].statut == NON_CONFORME)
+    nb_rub = sum(1 for l in res.forme if l.statut == NON_CONFORME and l.code in PAR_CODE and not PAR_CODE[l.code].cas_echeant
+                 and (l.precision.startswith("Rubrique absente") or "non renseignée" in l.precision))
+    nb_tab = sum(1 for c in TABLEAU_PAR_CODE if c not in res.tableaux.par_code)
     if nb_rub or nb_tab:
         faibles.append("le canevas n'est pas intégralement respecté, "
                        + enumerer(([f"{nombre(nb_rub, True)} rubriques obligatoires"] if nb_rub else [])

@@ -514,7 +514,7 @@ class Rapprochement:
                     "montants d'exécution sont cumulés")
             return ECART_DATE, "Information", f"écart compatible avec le décalage de date (situation au {d:%d/%m/%Y})"
         if self.date_conforme is False:
-            return ECART, "Mineure", f"à confirmer : situation arrêtée au {d:%d/%m/%Y}" if d else ""
+            return ECART, "Mineure", f"écart constaté sur la base de la situation arrêtée au {d:%d/%m/%Y}" if d else ""
         majeure = rel > 0.01 or (taux and abs(v_rap - v_sit) > 1)
         return ECART, "Majeure" if majeure else "Mineure", ""
 

@@ -19,7 +19,7 @@ from analyse_cb.analyse import charger_decrets, charger_parametres, charger_situ
 st.set_page_config(page_title="Analyse des rapports des CB", page_icon="📑", layout="wide")
 st.title("Analyse des rapports des Contrôleurs Budgétaires")
 st.caption("Contrôle automatique de la forme et du fond selon le canevas DCB de juillet 2023 – "
-           "pré-remplissage du fichier d'analyse. Les résultats sont à valider par le Chargé d'Études.")
+           "production du fichier d'analyse.")
 
 with st.sidebar:
     st.header("Paramètres")

@@ -26,7 +26,15 @@ FIN = Side(style="thin", color="999999")
 BORDURE = Border(left=FIN, right=FIN, top=FIN, bottom=FIN)
 ENTETE = PatternFill("solid", fgColor="1F4E78")
 POLICE_AUTO = Font(name="Calibri", size=9, italic=True, color="1F4E78")
-MENTION_AUTO = "[Pré-rempli automatiquement – à valider par le Chargé d'Études]"
+MENTION_AUTO = "[Pré-rempli automatiquement – à valider par le Chargé d'Études]"  # mode brouillon uniquement
+
+
+def _mention(res) -> str:
+    return "" if res.validation_directe else MENTION_AUTO
+
+
+def _prefixe(res) -> str:
+    return "" if res.validation_directe else MENTION_AUTO + "\n"
 
 
 def _mettre_en_forme_statuts(ws, plage: str) -> None:
@@ -101,8 +109,9 @@ def remplir_modele(res: ResultatAnalyse, sortie: str | Path, modele: str | Path 
     ws["E9"].alignment = ENVELOPPE
     ws["A10"].value = res.canevas_en_vigueur[1]
     ws["A10"].font = POLICE_AUTO
-    ws["A2"].value = (MENTION_AUTO + f" – fichier analysé : {res.doc.chemin.name}"
-                      + (" (scanné, lu par OCR)" if res.doc.ocr else "") + f" – le {date.today():%d/%m/%Y}")
+    entete = _mention(res)
+    ws["A2"].value = ((entete + " – " if entete else "") + f"Rapport analysé : {res.doc.chemin.name}"
+                      + (" (document scanné)" if res.doc.ocr else "") + f" – analyse du {date.today():%d/%m/%Y}")
     ws["A2"].font = POLICE_AUTO
 
     # ---------------------------------------------------------------- I. délai
@@ -118,9 +127,10 @@ def remplir_modele(res: ResultatAnalyse, sortie: str | Path, modele: str | Path 
     ws["E14"].value = ('=IF(D14="","Date de réception non renseignée",IF(D14<=0,"Transmis dans les délais",'
                        '"Hors délai de "&D14&" jour(s)"))')
     ws["E14"].alignment = ENVELOPPE
-    ws["A16"].value = ("Date limite calculée selon config/parametres.toml ; l'écart et l'appréciation se recalculent "
-                       "si vous modifiez les dates.")
-    ws["A16"].font = POLICE_AUTO
+    if not res.validation_directe:
+        ws["A16"].value = ("Date limite calculée selon config/parametres.toml ; l'écart et l'appréciation se recalculent "
+                           "si vous modifiez les dates.")
+        ws["A16"].font = POLICE_AUTO
 
     # ---------------------------------------------------------------- II. forme
     for l in res.forme:
@@ -141,7 +151,7 @@ def remplir_modele(res: ResultatAnalyse, sortie: str | Path, modele: str | Path 
     _mettre_en_forme_statuts(ws, "C22:C74")
 
     from .redaction import appreciation_forme
-    synthese_forme = MENTION_AUTO + "\n" + appreciation_forme(res)
+    synthese_forme = _prefixe(res) + appreciation_forme(res)
     _ecrire_long(ws, 78, synthese_forme.strip())
     _ajuster_texte(ws, 78, synthese_forme.strip())
 
@@ -167,7 +177,7 @@ def remplir_modele(res: ResultatAnalyse, sortie: str | Path, modele: str | Path 
     dv_fond_c.add("D83:D123")
     _mettre_en_forme_statuts(ws, "C83:D123")
     from .redaction import appreciation_fond
-    synthese_fond = MENTION_AUTO + "\n" + appreciation_fond(res)
+    synthese_fond = _prefixe(res) + appreciation_fond(res)
     _ecrire_long(ws, 127, synthese_fond)
     _ajuster_texte(ws, 127, synthese_fond)
 
@@ -191,7 +201,7 @@ def remplir_modele(res: ResultatAnalyse, sortie: str | Path, modele: str | Path 
                 pages = sorted({e.page for e in items if e.page})
                 ws[f"C{ligne}"].value = items[0].rubrique + (f" (p. {', '.join(map(str, pages))})" if pages else "")
                 ws[f"C{ligne}"].alignment = ENVELOPPE
-            ws[f"{col_appr}{ligne}"].value = A_APPRECIER
+            ws[f"{col_appr}{ligne}"].value = "Retenue" if res.validation_directe else A_APPRECIER
             ws[f"{col_appr}{ligne}"].alignment = CENTRE
     nd, ns = len(res.difficultes.get("difficultes", [])), len(res.difficultes.get("suggestions", []))
     _ecrire_long(ws, 145, f"{nd} difficulté(s) extraite(s) du rapport. "
@@ -204,7 +214,7 @@ def remplir_modele(res: ResultatAnalyse, sortie: str | Path, modele: str | Path 
 
     # ---------------------------------------------------------------- V. appréciation générale
     from .redaction import appreciation_generale
-    projet = MENTION_AUTO + "\n" + appreciation_generale(res)
+    projet = _prefixe(res) + appreciation_generale(res)
     _ecrire_long(ws, 166, projet, 178)
     _ajuster_texte(ws, 166, projet, derniere=178)
     suite = suite_a_donner(res)
@@ -221,141 +231,12 @@ def remplir_modele(res: ResultatAnalyse, sortie: str | Path, modele: str | Path 
     return sortie
 
 
-def principaux_constats(res: ResultatAnalyse, n: int = 6):
-    """Constats majeurs les plus significatifs, variés (au plus deux par tableau) : d'abord ceux qui reposent sur
-    les références externes (décret, situation d'exécution), puis les tableaux du canevas, puis le reste."""
-    def rang(c):
-        if c.controle.startswith("Texte de création"):
-            return 0
-        if "impossible" in c.message:
-            return 1
-        if c.controle.startswith("Concordance"):
-            return 2
-        if c.controle.startswith(("Total", "Sous-total")) or c.nature == "coherence":
-            return 3
-        if c.tableau.startswith("«"):
-            return 5  # tableaux hors canevas
-        return 4
-    majeures = sorted((c for c in res.constats if c.gravite == "Majeure"), key=rang)
-    retenus, par_tableau = [], {}
-    for c in majeures:
-        if par_tableau.get(c.tableau, 0) >= 2 and c.tableau:
-            continue
-        par_tableau[c.tableau] = par_tableau.get(c.tableau, 0) + 1
-        retenus.append(c)
-        if len(retenus) >= n:
-            break
-    return retenus
-
-
-def projet_appreciation(res: ResultatAnalyse) -> str:
-    forts, faibles, recos = [], [], []
-    if res.ecart_jours is not None:
-        (forts if res.ecart_jours <= 0 else faibles).append(res.appreciation_delai.lower())
-        if res.ecart_jours > 0:
-            recos.append("Respecter les délais de transmission des rapports à la DCB.")
-    if res.score_forme >= 90:
-        forts.append("respect global du canevas de rédaction")
-    absentes = [l.libelle for l in res.forme if l.statut == NON_CONFORME and l.code not in ("signature", "sommaire", "global_forme", "tableaux")]
-    if absentes:
-        faibles.append("rubriques/tableaux manquants : " + "; ".join(absentes[:10]) + ("…" if len(absentes) > 10 else ""))
-        recos.append("Se conformer strictement au canevas en vigueur (note n°0580/MBPE/DGBF/DCB) en intégrant les "
-                     "rubriques et tableaux manquants.")
-    calc = [c for c in res.tableaux.constats if c.nature == "fiabilite"]
-    calc_maj = [c for c in calc if c.gravite == "Majeure"]
-    if res.tableaux.par_code and not calc:
-        forts.append("tableaux chiffrés arithmétiquement justes")
-    elif calc:
-        faibles.append(f"{len(calc_maj)} erreur(s) de calcul dans les tableaux (sommes, totaux, taux, disponibles)"
-                       + (f" et {len(calc) - len(calc_maj)} anomalie(s) de présentation" if len(calc) > len(calc_maj) else ""))
-        recos.append("Vérifier les calculs (sous-totaux, totaux, taux) avant transmission du rapport.")
-    coh = [c for c in res.constats if c.nature == "coherence"]
-    if coh:
-        faibles.append(f"{len(coh)} incohérence(s) entre tableaux ou entre texte et tableaux")
-        recos.append("Assurer la concordance des montants et des taux entre les différents tableaux et les commentaires.")
-    elif res.tableaux.par_code:
-        forts.append("concordance des données entre tableaux et commentaires")
-    if res.signature[0] == NON_CONFORME:
-        faibles.append("rapport non signé ou non daté")
-        recos.append("Dater et signer le rapport.")
-    peu = [l for l in res.forme if l.statut == CONFORME and "peu développée" in l.precision]
-    if peu:
-        faibles.append("rubriques insuffisamment développées : " + "; ".join(l.libelle for l in peu[:6]))
-        recos.append("Approfondir l'analyse des rubriques insuffisamment développées.")
-    if not res.difficultes.get("suggestions"):
-        recos.append("Formuler des suggestions opérationnelles en réponse aux difficultés relevées.")
-    if res.confrontation:
-        from .decret import CONFORME as D_OK, ECART
-        ecarts = [p for p in res.confrontation.points if p.statut == ECART]
-        conformes = [p.theme.lower() for p in res.confrontation.points if p.statut == D_OK]
-        if conformes:
-            forts.append("présentation conforme au décret de création pour : " + ", ".join(conformes))
-        if ecarts:
-            faibles.append("écarts avec le décret de création et d'organisation : "
-                           + " ; ".join(f"{p.theme.lower()} ({p.constat.rstrip('.')})" for p in ecarts))
-            if any(p.theme.startswith("Référence du texte") for p in ecarts):
-                recos.append(f"Corriger la référence du texte de création de l'EPN : {res.decret.reference}.")
-            if any(p.rubrique != "texte_creation" for p in ecarts):
-                recos.append("Rappeler fidèlement le cadre institutionnel de l'EPN (missions, organes, mode de financement) "
-                             "tel que fixé par le décret de création.")
-        a_verifier = [p for p in res.confrontation.points if p.rubrique == "coges" and "aucune session" in p.constat]
-        if a_verifier:
-            faibles.append("Conseil de gestion non fonctionnel sur la période (aucune session), sans analyse des "
-                           "conséquences sur la gouvernance de l'EPN")
-    if res.rapprochement:
-        rap = res.rapprochement
-        ok = [l.libelle.lower() for l in rap.lignes if l.statut == "Concordant"]
-        if ok:
-            forts.append("montants concordants avec la situation d'exécution pour : " + ", ".join(ok[:6])
-                         + ("…" if len(ok) > 6 else ""))
-        impossibles = [c for c in rap.constats if "impossible" in c.message]
-        autres = [c for c in rap.constats if c.controle.startswith("Concordance") and c not in impossibles
-                  and c.gravite != "Information"]
-        if impossibles:
-            faibles.append("montants d'exécution supérieurs à ceux de la situation d'exécution de référence, pourtant "
-                           "arrêtée à une date postérieure (montants erronés)")
-            recos.append("Corriger les montants d'exécution à partir de la situation d'exécution du système d'information "
-                         "budgétaire arrêtée à la fin de la période.")
-        if autres:
-            faibles.append(f"{len(autres)} écart(s) avec la situation d'exécution de référence (prévisions, budget actuel, taux)")
-        budget = next((l for l in rap.lignes if l.libelle == "Budget actuel de dépenses" and l.statut == "Écart"), None)
-        if budget and budget.situation is not None:
-            recos.append(f"Présenter les dépenses sur la base du budget actuel ({format_montant(budget.situation)} selon "
-                         "la situation d'exécution), en répercutant les mesures de régulation.")
-        if rap.date_conforme is False and res.situation.date_arrete:
-            recos.append(f"(Pour la DCB) Obtenir la situation d'exécution arrêtée au {res.periode.fin:%d/%m/%Y} pour "
-                         f"confirmer les écarts (situation fournie au {res.situation.date_arrete:%d/%m/%Y}).")
-    controles = {c.controle for c in res.constats}
-    if {"Exercice cité conforme à la période", "Trimestre cité conforme à la période"} & controles:
-        faibles.append("mentions d'un autre exercice ou trimestre (reprises d'un rapport antérieur)")
-        recos.append("Actualiser les mentions de période (exercice, trimestre, dates) avant transmission.")
-    if "Codes d'activité uniques" in controles:
-        faibles.append("codes d'activité erronés ou en double")
-        recos.append("Reprendre les codes d'activité de la nomenclature budgétaire (budget-programmes).")
-    if any(c.controle.startswith("Signe") for c in res.constats):
-        recos.append("Présenter les baisses et réductions de crédits avec leur signe négatif.")
-    exemples = [c for c in principaux_constats(res, 6) if not c.controle.startswith("Texte de création")][:5]
-    from .analyse import _court
-
-    def puces(liste, retrait="- "):
-        return "\n".join(f"{retrait}{x[0].upper()}{x[1:]}" for x in liste)
-    texte = (f"{MENTION_AUTO}\n"
-             f"Appréciation globale : forme {res.mention(res.score_forme).lower()} ({res.score_forme:.0f} %), fond "
-             + (f"{res.mention(res.score_fond).lower()} ({res.score_fond:.0f} % des points vérifiables)." if res.score_fond is not None
-                else "à apprécier (aucun point vérifiable automatiquement).")
-             + "\n\nPoints forts :\n" + (puces(forts) if forts else "- À compléter")
-             + "\n\nInsuffisances :\n" + (puces(faibles) if faibles else "- Aucune insuffisance majeure détectée automatiquement")
-             + ("\n\nPrincipaux constats chiffrés :\n" + puces([_court(c, 220) for c in exemples]) if exemples else "")
-             + "\n\nRecommandations au Contrôleur Budgétaire :\n" + (puces(recos) if recos else "- RAS"))
-    return texte
-
-
 def suite_a_donner(res: ResultatAnalyse) -> str:
     seuil = res.parametres.get("appreciation", {}).get("retour_cb_si_score_forme_inferieur_a", 75)
     if res.score_forme < seuil or res.nb_anomalies_majeures >= res.parametres.get("appreciation", {}).get(
             "retour_cb_si_anomalies_majeures", 3):
         return (f"Au regard des insuffisances relevées, tant sur la forme (taux de conformité de {res.score_forme:.0f} %) "
-                f"que sur le fond ({res.nb_anomalies_majeures} anomalies majeures), il est proposé de retourner le rapport "
+                f"que sur le fond ({res.nb_anomalies_majeures} anomalies majeures), le rapport est retourné "
                 "au Contrôleur Budgétaire aux fins de correction et de complétude.")
     return ("Le rapport est jugé exploitable et peut être intégré à la synthèse des rapports des Contrôleurs Budgétaires, "
             "sous réserve de la prise en compte des observations formulées.")
@@ -390,7 +271,7 @@ def _couleur(statut: str) -> str | None:
 
 def ajouter_onglets_detail(wb: Workbook, res: ResultatAnalyse) -> None:
     # Synthèse
-    ws = wb.create_sheet("Synthèse auto")
+    ws = wb.create_sheet("Synthèse")
     ws["A1"] = "Synthèse de l'analyse automatique"
     ws["A1"].font = Font(bold=True, size=14, color="1F4E78")
     infos = [
@@ -408,7 +289,7 @@ def ajouter_onglets_detail(wb: Workbook, res: ResultatAnalyse) -> None:
          (f"{res.decret.reference} ({res.decret.chemin.name}) – " if res.decret else "") + res.appreciation_decret),
         ("Situation d'exécution",
          (f"{res.situation.noms_fichiers} – " if res.situation else "") + res.appreciation_situation),
-        ("Suite à donner (proposition)", suite_a_donner(res)),
+        ("Suite à donner", suite_a_donner(res)),
     ]
     for i, (k, v) in enumerate(infos, start=3):
         ws.cell(i, 1, k).font = Font(bold=True)
@@ -525,7 +406,7 @@ def _onglet_decret(wb: Workbook, res: ResultatAnalyse) -> None:
     ws = wb.create_sheet("Décret de création")
     ws["A1"] = "Confrontation du rapport au décret de création et d'organisation de l'EPN"
     ws["A1"].font = Font(bold=True, size=14, color="1F4E78")
-    ws["A2"] = MENTION_AUTO + (" – décret scanné, lu par OCR : à confirmer sur l'original." if d.ocr else "")
+    ws["A2"] = (_mention(res) + " – " if _mention(res) else "") + ("Décret scanné, lu par reconnaissance de caractères." if d.ocr else "")
     ws["A2"].font = POLICE_AUTO
     i = _bloc_infos(ws, 4, [
         ("Fichier", d.chemin.name), ("Texte de création", d.reference or "(non lu)"),
@@ -553,7 +434,7 @@ def _onglet_situation(wb: Workbook, res: ResultatAnalyse) -> None:
     ws = wb.create_sheet("Situation d'exécution")
     ws["A1"] = "Rapprochement du rapport avec la situation d'exécution du budget"
     ws["A1"].font = Font(bold=True, size=14, color="1F4E78")
-    ws["A2"] = MENTION_AUTO
+    ws["A2"] = _mention(res)
     ws["A2"].font = POLICE_AUTO
     date_ok = ("—" if not rap or rap.date_conforme is None else
                "conforme à la fin de la période" if rap.date_conforme else
@@ -628,7 +509,7 @@ def tableau_de_bord(resultats: list[tuple[ResultatAnalyse, Path]], sortie: str |
               "Délai", "Canevas en vigueur", "Conformité forme (%)", "Appréciation forme", "Fiabilité/cohérence (%)",
               "Rubriques absentes", "Tableaux manquants", "Anomalies majeures", "Anomalies mineures",
               "Signé et daté", "Conformité au décret de création", "Concordance avec la situation d'exécution",
-              "Suite à donner (proposition)", "Fichier d'analyse"]
+              "Suite à donner", "Fichier d'analyse"]
     _entetes(ws, 1, titres, [35, 25, 28, 12, 12, 10, 22, 18, 12, 18, 12, 50, 22, 10, 10, 14, 40, 60, 60, 40])
     for i, (r, fichier) in enumerate(resultats, start=2):
         tabs_manquants = [l.libelle.split(" :")[0] for l in r.forme

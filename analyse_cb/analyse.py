@@ -85,6 +85,10 @@ class ResultatAnalyse:
     situation: SituationExecution | None = None
     rapprochement: Rapprochement | None = None
 
+    @property
+    def validation_directe(self) -> bool:
+        return bool(self.parametres.get("analyse", {}).get("validation_directe", True))
+
     # -------------------------------------------------------------- indicateurs
     @property
     def constats(self) -> list[Constat]:
@@ -263,6 +267,8 @@ def analyser(chemin: str | Path, infos: InfosRapport | None = None, parametres: 
     _evaluer_canevas(res)
     _evaluer_forme(res)
     _evaluer_fond(res)
+    if res.validation_directe:
+        _valider(res)
     if not periode.detectee:
         doc.avertissements.append("La période couverte n'a pas pu être détectée : précisez-la (option --periode).")
     return res
@@ -513,6 +519,58 @@ def _evaluer_fond(res: ResultatAnalyse) -> None:
         INCOHERENT if any(l.coherence == INCOHERENT for l in tous) else A_APPRECIER,
         f"{nb_ko} rubrique(s) présentant des anomalies de fiabilité ou de cohérence ; {nb_abs} rubrique(s) non renseignée(s)."))
     res.fond = lignes
+
+
+def _valider(res: ResultatAnalyse) -> None:
+    """Validation directe : les statuts provisoires (« À vérifier », « À apprécier ») sont tranchés."""
+    s = res.structure
+    for l in res.forme:
+        if l.statut != A_VERIFIER:
+            continue
+        rub = PAR_CODE.get(l.code)
+        if rub and rub.cas_echeant and not s[rub.code].trouvee:
+            l.statut = NON_APPLICABLE
+            l.precision = "Non mentionné ; l'établissement n'est pas réputé concerné."
+        elif rub and rub.niveau == 1 and s[rub.code].trouvee and s[rub.code].nb_mots > 0:
+            l.statut = CONFORME  # partie présente ; les sous-rubriques manquantes sont notées sur leurs propres lignes
+        elif rub and rub.annuel_seulement and not res.periode.annuel:
+            l.statut = NON_APPLICABLE
+        else:
+            l.statut = NON_CONFORME
+    for l in res.fond:
+        if A_APPRECIER not in (l.fiabilite, l.coherence):
+            continue
+        rub = PAR_CODE.get(l.code)
+        det = s.detections.get(l.code)
+        renseignee = bool(det and det.trouvee and det.nb_mots > 0)
+        if rub and not renseignee and (rub.cas_echeant or (rub.annuel_seulement and not res.periode.annuel)):
+            l.fiabilite = l.coherence = SANS_OBJET
+            l.commentaire = "Rubrique sans objet pour cet établissement ou pour cette période."
+            continue
+        if l.code == "global_fond" or renseignee:
+            if l.fiabilite == A_APPRECIER:
+                l.fiabilite = FIABLE
+            if l.coherence == A_APPRECIER:
+                l.coherence = COHERENT
+            if renseignee and "anomalie" not in l.commentaire.lower() and not l.commentaire.startswith("Décret – "):
+                l.commentaire = "Aucune anomalie relevée. " + l.commentaire
+        else:
+            l.fiabilite = NON_RENSEIGNE if l.fiabilite == A_APPRECIER else l.fiabilite
+            l.coherence = NON_RENSEIGNE if l.coherence == A_APPRECIER else l.coherence
+    if res.confrontation:  # points du décret laissés « À vérifier » : simples constats
+        from .decret import A_VERIFIER as D_A_VERIFIER, INFO
+        for p in res.confrontation.points:
+            if p.statut == D_A_VERIFIER:
+                p.statut = INFO
+    # La ligne de synthèse reflète les lignes de détail
+    glob = next((l for l in res.fond if l.code == "global_fond"), None)
+    if glob:
+        autres = [l for l in res.fond if l is not glob]
+        glob.fiabilite = NON_FIABLE if any(l.fiabilite == NON_FIABLE for l in autres) else FIABLE
+        glob.coherence = INCOHERENT if any(l.coherence == INCOHERENT for l in autres) else COHERENT
+    for l in res.forme:  # ligne de synthèse de la forme
+        if l.code == "global_forme" and l.statut == A_VERIFIER:
+            l.statut = CONFORME
 
 
 def _references(res: ResultatAnalyse, code: str, fiab: str, coh: str, com: str) -> tuple[str, str, str]:

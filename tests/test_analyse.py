@@ -123,7 +123,7 @@ def test_anomalies_rubriques_manquantes(res_anomalies):
     assert statut(r, "controle_gestion") == "Non conforme"
     assert statut(r, "risques") == "Non conforme"
     assert statut(r, "T8") == "Non conforme"
-    assert statut(r, "antennes") == "À vérifier"
+    assert statut(r, "antennes") == "Non applicable"  # validation directe : « le cas échéant » non mentionné
     assert statut(r, "global_forme") == "Non conforme"
     assert statut(r, "signature") == "Non conforme"
     assert statut(r, "sommaire") in ("À vérifier", "Non conforme")
@@ -154,7 +154,7 @@ def test_remplissage_excel(res_anomalies, tmp_path):
     assert ws["C101"].value == "Non renseigné"
     assert ws["C97"].value == "Non fiable"
     assert "Retard" in ws["E136"].value
-    assert {"Synthèse auto", "Contrôle structure", "Contrôles automatiques", "Ratios",
+    assert {"Synthèse", "Contrôle structure", "Contrôles automatiques", "Ratios",
             "Difficultés-Suggestions", "Tableaux extraits"} <= set(wb.sheetnames)
     tdb = tableau_de_bord([(res_anomalies, sortie)], tmp_path / "tdb.xlsx")
     assert openpyxl.load_workbook(tdb).active["A2"].value == "Agence Nationale d'Exemple"
@@ -493,3 +493,19 @@ def test_redaction_appreciation_forme(res_anomalies):
     assert "la rubrique nouvelle introduite en 2023 (l'analyse de la gestion des risques) n'est pas traitée" in texte
     assert "« Analyse des marches publics »" in texte
     assert "  " not in texte and " ," not in texte
+
+
+def test_validation_directe_et_mode_brouillon(rapports, tmp_path):
+    from analyse_cb.analyse import charger_parametres
+    r = analyser(rapports["anomalies"])
+    assert all(l.statut != "À vérifier" for l in r.forme)
+    assert all("À apprécier" not in (l.fiabilite, l.coherence) for l in r.fond)
+    ws = openpyxl.load_workbook(remplir_modele(r, tmp_path / "def.xlsx")).worksheets[0]
+    textes = " ".join(str(ws[c].value) for c in ("A2", "A78", "A127", "A166"))
+    assert "Pré-rempli" not in textes and "valider" not in textes
+    parametres = charger_parametres()
+    parametres["analyse"] = {"validation_directe": False}
+    b = analyser(rapports["anomalies"], parametres=parametres)
+    assert statut(b, "antennes") == "À vérifier"
+    ws = openpyxl.load_workbook(remplir_modele(b, tmp_path / "brouillon.xlsx")).worksheets[0]
+    assert ws["A78"].value.startswith("[Pré-rempli")
