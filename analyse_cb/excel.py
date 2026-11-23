@@ -336,6 +336,8 @@ def ajouter_onglets_detail(wb: Workbook, res: ResultatAnalyse) -> None:
                      "Cohérence", "Phrase du rapport"], [8, 35, 45, 35, 15, 12, 80])
     for i, r in enumerate(res.transverses.ratios, start=2):
         coh = {True: COHERENT, False: INCOHERENT, None: A_APPRECIER}[r.coherent]
+        if coh == A_APPRECIER and res.validation_directe:
+            coh = "Non cité" if r.cite is None else "Non vérifiable"
         _ligne(ws, i, [r.code, r.libelle, r.formule,
                        "\n".join(f"{format_taux(v)} (base {b})" for b, v in r.calcule.items()) or "non calculable",
                        format_taux(r.cite) if r.cite is not None else "non cité", coh, r.phrase])

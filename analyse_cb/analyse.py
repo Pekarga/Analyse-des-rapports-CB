@@ -569,8 +569,10 @@ def _valider(res: ResultatAnalyse) -> None:
         glob.fiabilite = NON_FIABLE if any(l.fiabilite == NON_FIABLE for l in autres) else FIABLE
         glob.coherence = INCOHERENT if any(l.coherence == INCOHERENT for l in autres) else COHERENT
     for l in res.forme:  # ligne de synthèse de la forme
-        if l.code == "global_forme" and l.statut == A_VERIFIER:
-            l.statut = CONFORME
+        if l.code == "global_forme":
+            if l.statut == A_VERIFIER:
+                l.statut = CONFORME
+            l.precision = re.sub(r"\s*À vérifier : .*$", "", l.precision)
 
 
 def _references(res: ResultatAnalyse, code: str, fiab: str, coh: str, com: str) -> tuple[str, str, str]:
