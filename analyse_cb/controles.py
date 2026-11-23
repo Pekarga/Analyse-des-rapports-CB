@@ -121,6 +121,12 @@ def date_limite(periode: Periode, parametres: dict) -> date:
     return date(periode.annee + 1, mm, jj)
 
 
+def _debut_periode(p: Periode) -> date:
+    if p.trimestre:
+        return date(p.annee, 3 * p.trimestre - 2, 1)
+    return date(p.annee, 1, 1)
+
+
 # ------------------------------------------------------------------ référentiel EPN
 @dataclass
 class FicheEPN:
@@ -212,12 +218,20 @@ def _casse_titre(nom: str) -> str:
     return t[0].upper() + t[1:]
 
 
-def identifier_controleur(doc: DocumentRapport) -> str:
+def identifier_controleur(doc: DocumentRapport, page_garde: bool = True) -> str:
     paras = doc.paragraphes
     for b in paras[:40]:
         m = re.search(r"contr[oô]leur budg[eé]taire\s*:\s*(.+)$", b.texte, re.I)
         if m and len(m.group(1)) > 3:
             return m.group(1).strip()
+    # Page de garde : nom suivi du grade (« SINSIN Firmin » / « Administrateur Principal des Services Financiers »)
+    grades = r"^(administrat|inspect|attache|controleur|conseill|ingenieur|economiste|tresorier|commissaire|secretaire)"
+    for k, b in enumerate(paras[:30] if page_garde else []):
+        if k + 1 < len(paras) and re.match(grades, paras[k + 1].norm):
+            t = b.texte.strip()
+            if 2 <= len(t.split()) <= 5 and not re.search(r"\d", t) and len(t) < 50 \
+                    and re.search(r"\b[A-ZÉÈ]{2,}\b", t) and not re.search(r"rapport|budget|trimestre|semestre|direction", b.norm):
+                return t
     fin = paras[-25:]
     for i, b in enumerate(fin):
         if re.search(r"(le|la)\s+contr[oô]leu[rs]e?\s+budg[eé]taire", b.texte, re.I):
@@ -241,7 +255,7 @@ def controle_signature(doc: DocumentRapport, fin_corps: int | None = None) -> tu
         date_rapport = lire_date(m.group(1))
         if date_rapport:
             break
-    signataire = identifier_controleur(doc) if re.search(r"controleu[rs]e? budgetaire", nf) else ""
+    signataire = identifier_controleur(doc, page_garde=False) if re.search(r"controleu[rs]e? budgetaire", nf) else ""
     images = doc.images_derniere_page
     if doc.ocr:
         garde = normaliser(" ".join(b.texte for b in doc.paragraphes if b.page == 1))
@@ -368,6 +382,7 @@ class ControlesTransverses:
         self._ratios()
         self._texte_creation()
         self._calculs_dans_le_texte()
+        self._references_periode()
 
     def _calculs_dans_le_texte(self) -> None:
         annexes = self.s["annexes"]
@@ -381,6 +396,48 @@ class ControlesTransverses:
                               f"Calcul inexact : « {expr} » (résultat exact : {format_montant(exact) if abs(exact) >= 100 else round(exact, 4)}).",
                               "Mineure", "fiabilite", attendu=format_montant(exact) if abs(exact) >= 100 else str(round(exact, 4)),
                               constate=format_montant(ecrit) if abs(ecrit) >= 100 else str(ecrit))
+
+    def _references_periode(self) -> None:
+        """Mentions d'une autre année ou d'un autre trimestre que la période du rapport (copier-coller d'un
+        rapport antérieur), et événements datés hors de la période annoncés comme tenus « au cours du trimestre »."""
+        p = self.periode
+        annexes = self.s["annexes"]
+        fin_corps = annexes.debut if annexes.trouvee else len(self.doc.blocs)
+        ordinaux = {"premier": 1, "1er": 1, "second": 2, "deuxieme": 2, "2eme": 2, "2e": 2, "troisieme": 3, "3eme": 3,
+                    "3e": 3, "quatrieme": 4, "4eme": 4, "4e": 4}
+        comparaison = r"entre|par rapport|qu.au|depuis|precedent|contre|comparativement|meme(s)? .{0,20}qu"
+        for b in self.doc.blocs[:fin_corps]:
+            if b.type != "p" or b.sommaire:
+                continue
+            n = b.norm
+            rub = self.s.section_du_bloc(b.index) or "introduction"
+            m = re.search(r"(present rapport|rapport)[^.]{0,120}\b(exercice|gestion|annee)\s+((?:19|20)\d\d)", n)
+            if m and int(m.group(3)) != p.annee:
+                self._ajouter(rub, "Exercice cité conforme à la période",
+                              f"Le rapport mentionne l'exercice {m.group(3)} alors qu'il porte sur {p.libelle.lower()} : "
+                              f"« {b.texte[:160]} »", "Mineure", attendu=str(p.annee), constate=m.group(3))
+            if p.trimestre and not re.search(comparaison, n):
+                for m in re.finditer(r"\b(au cours du|au|du)\s+(" + "|".join(ordinaux) + r")\s+trimestre", n):
+                    if ordinaux[m.group(2)] < p.trimestre:  # un trimestre à venir peut être cité (prévision)
+                        self._ajouter(rub, "Trimestre cité conforme à la période",
+                                      f"Le texte fait référence au {m.group(2)} trimestre dans un rapport du "
+                                      f"{p.trimestre}e trimestre (copier-coller d'un rapport antérieur ?) : « {b.texte[:160]} »",
+                                      "Mineure", attendu=f"{p.trimestre}e trimestre", constate=f"{m.group(2)} trimestre")
+                        break
+        # Événements (sessions, comités) datés hors de la période
+        debut = _debut_periode(p)
+        for code in ("comite_tresorerie", "coges", "gouvernance"):
+            texte = self.s.texte_section(code)
+            if not texte or not re.search(r"au cours (du|de la) (trimestre|semestre|periode)", normaliser(texte)):
+                continue
+            for m in re.finditer(r"\b\d{1,2}\s*(?:er)?\s+[a-z]+\s+(?:19|20)\d\d\b", normaliser(texte)):
+                d = lire_date(m.group(0))
+                if d and not (debut <= d <= p.fin):
+                    self._ajouter(code, "Événements datés dans la période",
+                                  f"Un événement présenté comme tenu au cours de la période est daté du {d:%d/%m/%Y}, hors de "
+                                  f"la période du rapport ({debut:%d/%m/%Y} – {p.fin:%d/%m/%Y}).", "Mineure",
+                                  attendu=f"{debut:%d/%m/%Y} – {p.fin:%d/%m/%Y}", constate=f"{d:%d/%m/%Y}")
+            break
 
     def _ajouter(self, rubrique, controle, message, gravite="Mineure", nature="coherence", attendu="", constate=""):
         self.constats.append(Constat(rubrique, controle, message, gravite, nature, "", "", attendu, constate))
@@ -409,7 +466,8 @@ class ControlesTransverses:
             if not valeurs_tableau:
                 continue
             for valeur, phrase in pourcentages_cites(texte, motif):
-                if not any(abs(valeur - v) <= 0.6 for v in valeurs_tableau):
+                tol = 1.0 if float(valeur).is_integer() else 0.6  # « 99 % » : taux arrondi à l'unité
+                if not any(abs(valeur - v) <= tol for v in valeurs_tableau):
                     global_ = valeurs_tableau[0] if n_tot is not None and d_tot else None
                     self._ajouter(code_rub, f"Cohérence du {nom} cité dans le texte",
                                   f"Le {nom} cité ({format_taux(valeur)}) ne correspond à aucun taux du {tab.nom}"

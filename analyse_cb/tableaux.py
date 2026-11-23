@@ -52,18 +52,40 @@ class TableauAnalyse:
     colonnes: dict[str, int] = field(default_factory=dict)
     lignes: list[LigneTableau] = field(default_factory=list)
     nb_lignes_entete: int = 1
+    principal: bool = True  # premier tableau du rapport rattaché à ce tableau du canevas
 
     @property
     def nom(self) -> str:
-        if self.code:
+        if self.code and self.principal:
             return f"Tableau {TABLEAU_PAR_CODE[self.code].numero} ({TABLEAU_PAR_CODE[self.code].libelle})"
+        if self.code:
+            leg = re.sub(r"\s+", " ", self.bloc.legende).strip()
+            return (f"« {leg[:80]} »" if leg else "Tableau sans titre") + f" [format du tableau {TABLEAU_PAR_CODE[self.code].numero}]"
         return "Tableau non identifié"
+
+    @property
+    def rubrique(self) -> str:
+        if not self.code:
+            return ""
+        if not self.principal:
+            leg = normaliser(self.bloc.legende)
+            if re.search(r"ressource|recette|financement", leg):
+                return "pres_ressources" if self.code in ("T1", "T2", "T3") else TABLEAU_PAR_CODE[self.code].rubrique
+            if re.search(r"depense|emploi|activit", leg):
+                return "pres_emplois" if self.code in ("T1", "T2", "T4") else TABLEAU_PAR_CODE[self.code].rubrique
+        return TABLEAU_PAR_CODE[self.code].rubrique
 
     def total(self, role: str) -> float | None:
         """Total général déclaré, ou à défaut somme des lignes de détail."""
         for l in self.lignes:
             if l.type == "total" and role in l.valeurs:
                 return l.valeurs[role]
+        if self.code in ("T1", "T2"):
+            # Tableau présentant à la fois une ligne « Recettes » et une ligne « Dépenses » : le budget est
+            # le montant de l'une d'elles (et non leur somme).
+            for l in self.lignes:
+                if re.match(r"^(budget|recettes|ressources)\b", normaliser(l.libelle)) and role in l.valeurs:
+                    return l.valeurs[role]
         details = [l.valeurs[role] for l in self.lignes if l.type == "ligne" and role in l.valeurs]
         if details:
             return sum(details)
@@ -108,8 +130,12 @@ RE_SOUS_TOTAL = re.compile(r"^(sous[- ]?totale?|s/total|s/t\b|total\s+\S)")
 SIGNATURES = [
     ("T7", lambda h, l: "motif" in h and "differe" in (h + l)),
     ("T8", lambda h, l: "motif" in h and "rejet" in (h + l)),
-    ("T5", lambda h, l: "recouvr" in h or ("prevision" in h and ("realis" in h or "encaiss" in h))),
-    ("T6", lambda h, l: "ordonnanc" in h or "taux d.execution" in h or ("budget actuel" in h and "engag" in h)),
+    ("T5", lambda h, l: "recouvr" in h or ("prevision" in h and re.search(r"realis|encaiss|vise|pris\w* en charge", h))),
+    ("T6", lambda h, l: "ordonnanc" in h or re.search(r"taux d.execution", h) is not None
+     or (re.search(r"budget (actuel|final|definitif)", h) is not None and re.search(r"engag|execution", h) is not None)),
+    # Modifications du budget en recettes présentées en « budget voté / budget actuel / variation »
+    ("T3", lambda h, l: re.search(r"vote|initial", h) is not None and re.search(r"actuel|final|definitif|revise", h) is not None
+     and re.search(r"ressource|recette|source", h + " " + l) is not None and "depense" not in l),
     ("T2", lambda h, l: "n-2" in h.replace(" ", "") or "trois derniers" in l),
     ("T1", lambda h, l: "variation" in h or ("n-1" in h.replace(" ", "") and "modification" not in h)),
     ("T3", lambda h, l: "modification" in h and ("ressource" in h or "recette" in h or "ressources" in l)),
@@ -177,21 +203,25 @@ def _roles(code: str, entetes: list[str]) -> dict[str, int]:
                     return
 
     if code in ("T3", "T4"):
-        prendre("initial", r"initial")
-        prendre("modif", r"modif")
+        prendre("initial", r"initial|vote")
+        prendre("modif", r"modif|variation")
         prendre("actuel", r"actuel|final|definitif|revise|corrige")
     elif code == "T5":
         prendre("initial", r"initial")
         prendre("final", r"final|definitiv|actuel|revise|corrige")
-        prendre("realise", r"recouvr|encaiss|realis(e|ee|ees|es|ations?)\b(?!.*taux)", exclure=r"taux")
+        prendre("realise", r"recouvr|encaiss|realis(e|ee|ees|es|ations?)\b(?!.*taux)", r"\bvise", r"pris\w*[- ]en[- ]charge",
+                exclure=r"taux")
+        prendre("paye", r"pris\w*[- ]en[- ]charge|paye|paiement")
         prendre("taux", r"taux")
-        prendre("ecart", r"ecart|reste")
+        prendre("ecart", r"ecart|reste|disponible")
     elif code == "T6":
         prendre("initial", r"initial")
         prendre("actuel", r"actuel|final|definitif|revise|corrige")
         prendre("engage", r"engag", exclure=r"taux")
         prendre("realise", r"ordonnanc|liquid|mandat|execut", exclure=r"taux")
+        prendre("paye", r"pris\w*[- ]en[- ]charge|paye|paiement")
         prendre("taux", r"taux")
+        prendre("ecart", r"disponible|reste|solde")
     elif code == "T1":
         prendre("n1", r"n\s*-\s*1|\(a\)")
         prendre("n", r"annee n\b|\(b\)|^n$")
@@ -236,14 +266,34 @@ def _lire_lignes(tab: TableauAnalyse) -> None:
             ligne.type = "total"
         elif RE_SOUS_TOTAL.match(n):
             ligne.type = "sous_total"
-        elif RE_GROUPE.match(n):
-            ligne.type = "groupe"
+        elif RE_GROUPE.match(n) and not (tab.code in ("T3", "T5") and not re.match(r"^(ressources|recettes|autres)", n)):
+            ligne.type = "groupe"  # (dans un tableau de ressources, « Dépenses de personnel » est une ligne de ressource)
         elif not ligne.valeurs:
             ligne.type = "vide"
         tab.lignes.append(ligne)
+    # Ligne de nature chiffrée sans détail (« 1 Personnel | 50 000 000 » suivie directement de « 2 Biens et services »,
+    # ou « Dépenses de personnel » dans un tableau de ressources) : c'est une ligne, pas un en-tête de groupe.
+    utiles = [l for l in tab.lignes if l.type != "vide"]
+    for k, l in enumerate(utiles):
+        if l.type == "groupe" and l.valeurs:
+            suivante = utiles[k + 1] if k + 1 < len(utiles) else None
+            if suivante is None or suivante.type in ("groupe", "total", "sous_total"):
+                l.type = "ligne"
 
 
 # ------------------------------------------------------------------ contrôles
+def _bases(v: dict, numerateurs, denominateurs) -> list[tuple[str, float]]:
+    """Autres bases de calcul possibles d'un taux (pour expliquer un taux déclaré différent du canevas)."""
+    noms = {"realise": "réalisation", "paye": "prises en charge", "final": "prévision finale",
+            "actuel": "budget actuel", "initial": "prévision/budget initial(e)"}
+    out = []
+    for n in numerateurs:
+        for d in denominateurs:
+            if (n, d) != (numerateurs[0], denominateurs[0]) and n in v and v.get(d):
+                out.append((f"{noms[n]} / {noms[d]}", v[n] / v[d] * 100))
+    return out
+
+
 def _tol_montant(*bruts: str, n: int = 1) -> float:
     dec = max((decimales(b) for b in bruts if b), default=0)
     return max(1.0, n * 0.5) * 10 ** (-dec) + 1e-6
@@ -267,14 +317,42 @@ class ControleTableaux:
         for t in self.tableaux:
             if t.code and t.code not in self.par_code:
                 self.par_code[t.code] = t
+            elif t.code:
+                t.principal = False
         self.constats: list[Constat] = []
-        for t in self.par_code.values():
-            self._controler(t)
+        for t in self.tableaux:
+            if t.code:
+                self._controler(t)
         self._coherence()
+        self._codes_en_double()
         self._dedoublonner()
 
     def _dedoublonner(self) -> None:
-        """Une même erreur répercutée sur plusieurs colonnes (ex. initial et actuel) n'est signalée qu'une fois."""
+        """Une même erreur répercutée sur plusieurs colonnes (ex. initial et actuel) n'est signalée qu'une fois ;
+        les anomalies de présentation répétées sur plusieurs lignes d'un tableau sont regroupées."""
+        regroupables = ("Signe de la variation", "Signe du taux", "Signe des modifications", "Base de calcul du taux")
+        groupes: dict[tuple, list[Constat]] = {}
+        autres = []
+        for c in self.constats:
+            if c.controle in regroupables:
+                groupes.setdefault((c.tableau, c.controle), []).append(c)
+            else:
+                autres.append(c)
+        for (tableau, controle), cs in groupes.items():
+            if len(cs) == 1:
+                autres.append(cs[0])
+                continue
+            lignes = [c.ligne for c in cs]
+            c0 = cs[0]
+            libelle = {"Signe de la variation": "baisses présentées sans signe négatif",
+                       "Signe du taux": "taux de baisse présentés sans signe négatif",
+                       "Signe des modifications": "réductions de crédits présentées sans signe négatif",
+                       "Base de calcul du taux": "taux calculés sur une autre base que celle du canevas"}[controle]
+            autres.append(Constat(c0.rubrique, controle,
+                                  f"{tableau} : {len(cs)} {libelle} (lignes : " + " ; ".join(l[:50] for l in lignes[:6])
+                                  + (" ; …" if len(lignes) > 6 else "") + "). Ex. : " + c0.message.split(" : ", 1)[-1],
+                                  c0.gravite, c0.nature, tableau, f"{len(cs)} lignes", c0.attendu, c0.constate))
+        self.constats = autres
         vus: dict[tuple, Constat] = {}
         uniques = []
         for c in self.constats:
@@ -296,7 +374,7 @@ class ControleTableaux:
 
     def _ajouter(self, tab: TableauAnalyse, controle, ligne, attendu, constate, message,
                  gravite="Majeure", nature="fiabilite"):
-        rub = TABLEAU_PAR_CODE[tab.code].rubrique if tab.code else ""
+        rub = tab.rubrique
         self.constats.append(Constat(rub, controle, message, gravite, nature, tab.nom, ligne, attendu, constate))
 
     # ------------------------------------------------------------------ fiabilité
@@ -314,14 +392,27 @@ class ControleTableaux:
             v, b = l.valeurs, l.brut
             if tab.code in ("T3", "T4") and {"initial", "modif", "actuel"} <= v.keys():
                 attendu = v["initial"] + v["modif"]
-                if abs(attendu - v["actuel"]) > _tol_montant(b["initial"], b["modif"], b["actuel"]):
+                tol = _tol_montant(b["initial"], b["modif"], b["actuel"])
+                if abs(attendu - v["actuel"]) > tol and abs(v["initial"] - v["modif"] - v["actuel"]) <= tol:
+                    self._ajouter(tab, "Signe des modifications", l.libelle, format_montant(-v["modif"]),
+                                  format_montant(v["modif"]),
+                                  f"{tab.nom}, ligne « {l.libelle} » : la réduction de crédits est présentée sans signe "
+                                  f"négatif ({format_montant(v['modif'])} au lieu de {format_montant(-v['modif'])}).",
+                                  "Mineure")
+                elif abs(attendu - v["actuel"]) > tol:
+                    reduction = v["initial"] - v["modif"]  # modifications présentées comme des réductions
+                    if v["modif"] > 0 and abs(reduction - v["actuel"]) < abs(attendu - v["actuel"]):
+                        attendu, libelle_calcul = reduction, "montant initial − réduction"
+                    else:
+                        libelle_calcul = "montant initial + modifications"
                     self._ajouter(tab, "Montant actuel = initial + modifications", l.libelle,
                                   format_montant(attendu), format_montant(v["actuel"]),
                                   f"{tab.nom}, ligne « {l.libelle} » : le montant actuel ({format_montant(v['actuel'])}) "
-                                  f"≠ montant initial + modifications ({format_montant(attendu)}).")
+                                  f"≠ {libelle_calcul} ({format_montant(attendu)}).")
             if tab.code == "T5" and "final" in v and "realise" in v:
                 if "taux" in v and v["final"]:
-                    self._verifier_taux(tab, l, v["realise"] / v["final"] * 100, "Taux de réalisation = Recouvrement / Prévision finale")
+                    self._verifier_taux(tab, l, v["realise"] / v["final"] * 100, "Taux de réalisation = Recouvrement / Prévision finale",
+                                        _bases(v, ("realise", "paye"), ("final", "initial")))
                 if "ecart" in v:
                     attendu = v["final"] - v["realise"]
                     if min(abs(abs(attendu) - abs(v["ecart"])), abs(attendu - v["ecart"])) > _tol_montant(b["final"], b["realise"], b["ecart"]):
@@ -330,12 +421,26 @@ class ControleTableaux:
                                       f"{tab.nom}, ligne « {l.libelle} » : écart déclaré {format_montant(v['ecart'])}, "
                                       f"écart recalculé {format_montant(attendu)}.")
             if tab.code == "T6" and "actuel" in v and "realise" in v and "taux" in v and v["actuel"]:
-                self._verifier_taux(tab, l, v["realise"] / v["actuel"] * 100, "Taux d'exécution = Ordonnancement / Budget actuel")
+                self._verifier_taux(tab, l, v["realise"] / v["actuel"] * 100, "Taux d'exécution = Ordonnancement / Budget actuel",
+                                    _bases(v, ("realise", "paye"), ("actuel", "initial")))
+            if tab.code == "T6" and {"actuel", "realise", "ecart"} <= v.keys():
+                attendu = v["actuel"] - v["realise"]
+                if abs(attendu - v["ecart"]) > _tol_montant(b["actuel"], b["realise"], b["ecart"]):
+                    self._ajouter(tab, "Disponible = Budget actuel − Exécution", l.libelle, format_montant(attendu),
+                                  format_montant(v["ecart"]),
+                                  f"{tab.nom}, ligne « {l.libelle} » : disponible déclaré {format_montant(v['ecart'])}, "
+                                  f"disponible recalculé {format_montant(attendu)}.")
             if tab.code == "T1" and "n" in v and "n1" in v:
-                if "variation" in v and abs(v["n"] - v["n1"] - v["variation"]) > _tol_montant(b["n"], b["n1"], b["variation"]):
+                tol = _tol_montant(b["n"], b["n1"], b.get("variation", ""))
+                if "variation" in v and abs(v["n"] - v["n1"] - v["variation"]) > tol and abs(abs(v["n"] - v["n1"]) - abs(v["variation"])) <= tol:
+                    self._ajouter(tab, "Signe de la variation", l.libelle, format_montant(v["n"] - v["n1"]),
+                                  format_montant(v["variation"]),
+                                  f"{tab.nom}, ligne « {l.libelle} » : la baisse ({format_montant(v['n'] - v['n1'])}) est "
+                                  f"présentée sans signe négatif ({format_montant(v['variation'])}).", "Mineure")
+                elif "variation" in v and abs(v["n"] - v["n1"] - v["variation"]) > tol:
                     self._ajouter(tab, "Variation = N − (N−1)", l.libelle, format_montant(v["n"] - v["n1"]),
                                   format_montant(v["variation"]),
-                                  f"{tab.nom} : la variation déclarée ({format_montant(v['variation'])}) ≠ "
+                                  f"{tab.nom}, ligne « {l.libelle} » : la variation déclarée ({format_montant(v['variation'])}) ≠ "
                                   f"budget N − budget N−1 ({format_montant(v['n'] - v['n1'])}).")
                 if "taux" in v and v["n1"]:
                     self._verifier_taux(tab, l, (v["n"] - v["n1"]) / v["n1"] * 100, "Taux de variation = (N − N−1) / N−1")
@@ -343,8 +448,19 @@ class ControleTableaux:
         if tab.code in ("T7", "T8"):
             self._motifs(tab)
 
-    def _verifier_taux(self, tab, l, attendu, controle):
+    def _verifier_taux(self, tab, l, attendu, controle, alternatives=()):
         ok, constate = _comparer_taux(attendu, l.valeurs["taux"], l.brut.get("taux", ""))
+        if not ok and abs(constate + attendu) <= 0.5 * 10 ** (-decimales(l.brut.get("taux", ""))) + 0.05:
+            self._ajouter(tab, "Signe du taux", l.libelle, format_taux(attendu), format_taux(constate),
+                          f"{tab.nom}, ligne « {l.libelle} » : taux de baisse présenté sans signe négatif "
+                          f"({format_taux(constate)} au lieu de {format_taux(attendu)}).", "Mineure")
+            return
+        for libelle_base, valeur in alternatives:
+            if not ok and _comparer_taux(valeur, l.valeurs["taux"], l.brut.get("taux", ""))[0]:
+                self._ajouter(tab, "Base de calcul du taux", l.libelle, format_taux(attendu), format_taux(constate),
+                              f"{tab.nom}, ligne « {l.libelle} » : le taux déclaré ({format_taux(constate)}) est calculé "
+                              f"sur la base {libelle_base} ; selon le canevas : {format_taux(attendu)}.", "Mineure")
+                return
         if not ok and abs(constate) >= 1000:
             self._ajouter(tab, controle, l.libelle, format_taux(attendu), format_montant(l.valeurs["taux"]),
                           f"{tab.nom}, ligne « {l.libelle} » : la colonne des taux contient un montant "
@@ -464,6 +580,44 @@ class ControleTableaux:
         comparer("T6", "initial", "T4", "initial", "Budget initial des dépenses (T6) = montant initial des emplois (T4)",
                  "Mineure")
         self._activites_t4_t6()
+        self._natures_t4_t6()
+
+    def _codes_en_double(self) -> None:
+        """Un même code d'activité (ou de nature) ne doit pas désigner deux lignes différentes d'un tableau."""
+        for t in self.tableaux:
+            vus: dict[str, str] = {}
+            doublons = []
+            for l in t.lignes:
+                m = re.match(r"^\s*(\d[\d ]{5,16}\d)\b", l.libelle)
+                if not m or l.type != "ligne":
+                    continue
+                code = m.group(1).replace(" ", "")
+                if len(code) not in (6, 11):
+                    continue
+                if code in vus and normaliser(vus[code]) != normaliser(l.libelle):
+                    doublons.append(f"{code} (« {vus[code][len(m.group(0)):][:45].strip()} » et « {l.libelle[len(m.group(0)):][:45].strip()} »)")
+                vus.setdefault(code, l.libelle)
+            if doublons:
+                self.constats.append(Constat(t.rubrique, "Codes d'activité uniques", f"{t.nom} : un même code "
+                                             f"désigne plusieurs lignes différentes : " + " ; ".join(doublons) + ".",
+                                             "Mineure", "fiabilite", t.nom, "", "codes distincts", "; ".join(d.split()[0] for d in doublons)))
+
+    def _natures_t4_t6(self) -> None:
+        """Répartition du budget initial par grande nature identique dans les tableaux 4 et 6."""
+        t4, t6 = self.par_code.get("T4"), self.par_code.get("T6")
+        if not t4 or not t6:
+            return
+        for nom, motif in (("Personnel", r"personnel"), ("Biens et services", r"biens et services"),
+                           ("Transferts", r"transfert"), ("Investissements", r"investissement")):
+            for role in ("initial", "actuel"):
+                a, b = t4.somme_groupe(motif, role), t6.somme_groupe(motif, role)
+                if a is None or b is None or abs(a - b) <= 1:
+                    continue
+                self.constats.append(Constat(
+                    "exec_depenses", f"Même répartition par nature dans les tableaux 4 et 6",
+                    f"{nom} ({_LIBELLE_ROLE[role]}) : {format_montant(a)} au {t4.nom} contre {format_montant(b)} au {t6.nom}.",
+                    "Majeure", "coherence", t6.nom, nom, format_montant(a), format_montant(b)))
+                break
 
     def _activites_t4_t6(self) -> None:
         """Les activités (codes budgétaires) présentées au tableau 4 doivent être celles exécutées au tableau 6."""
@@ -525,4 +679,4 @@ class ControleTableaux:
 _LIBELLE_ROLE = {"initial": "montant/prévision initial(e)", "modif": "modifications", "actuel": "montant actuel",
                  "final": "prévision finale", "realise": "réalisation", "ecart": "écart", "engage": "engagements",
                  "n": "année N", "n1": "année N−1", "n2": "année N−2", "variation": "variation",
-                 "nombre": "nombre", "montant": "montant"}
+                 "nombre": "nombre", "montant": "montant", "paye": "prises en charge"}

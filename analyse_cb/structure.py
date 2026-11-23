@@ -171,7 +171,8 @@ class AnalyseStructure:
             t = normaliser(_sans_numero(t))
             if re.match(r"^\d{6,}", t):
                 continue  # ligne de compte (annexe) prise à tort pour une entrée de sommaire
-            if t and t not in ("table des matieres", "sommaire", "liste des tableaux") \
+            if t and t not in ("table des matieres", "sommaire", "liste des tableaux", "plan du rapport", "plan",
+                               "plan de redaction") \
                     and not t.startswith("tableau") and len(t) > 2:
                 entrees.append(t)
         if not entrees:

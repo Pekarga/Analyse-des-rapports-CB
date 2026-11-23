@@ -399,11 +399,12 @@ def _evaluer_fond(res: ResultatAnalyse) -> None:
         return [c for c in res.constats if (c.tableau in noms or c.rubrique in rubriques)
                 and (nature is None or c.nature == nature)]
 
-    def statut_tableaux(codes, nature):
+    def statut_tableaux(codes, nature, rub_code=None):
         presents = [c for c in codes if c in t.par_code]
         if not presents:
             return None, []
-        cs = constats_de(presents, nature=nature)
+        # constats des tableaux du canevas + des autres tableaux du rapport rattachés à la rubrique
+        cs = constats_de(presents, rubriques=(rub_code,) if rub_code else (), nature=nature)
         cs = [c for c in cs if c.nature == nature and not c.controle.startswith("Concordance")]
         return (len(cs) == 0), cs
 
@@ -439,7 +440,7 @@ def _evaluer_fond(res: ResultatAnalyse) -> None:
         fiab, coh, com = A_APPRECIER, A_APPRECIER, f"Rubrique renseignée ({det.nb_mots} mots).{extrait}"
         if rub.code in regles_tableaux:
             codes = regles_tableaux[rub.code][0]
-            ok_f, cs_f = statut_tableaux(codes, "fiabilite")
+            ok_f, cs_f = statut_tableaux(codes, "fiabilite", rub.code)
             cs_c = constats_de(codes, rubriques=(rub.code,), nature="coherence")
             if ok_f is None:
                 fiab, com = A_APPRECIER, "Tableau(x) " + "/".join(c[1] for c in codes) + " absent(s) : calculs non vérifiables."

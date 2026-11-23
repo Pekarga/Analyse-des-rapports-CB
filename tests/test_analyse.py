@@ -338,3 +338,72 @@ def test_cli_references(rapports, references, tmp_path):
     assert code == 0
     wb = openpyxl.load_workbook(tmp_path / "out" / "Analyse_rapport_exemple_anomalies.xlsx")
     assert "Situation d'exécution" in wb.sheetnames
+
+
+# ------------------------------------------------------------------ présentations rencontrées dans des rapports réels
+def _rapport_libre(chemin: Path) -> Path:
+    """Rapport trimestriel FICTIF qui s'écarte du canevas : plan annoncé sans pagination, tableaux numérotés
+    librement, tableau d'exécution sans titre, baisses présentées sans signe, nom du CB en page de garde."""
+    import docx
+    d = docx.Document()
+    for t in ("DIRECTION DU CONTRÔLE BUDGETAIRE", "RAPPORT DU CONTROLEUR BUDGETAIRE AUPRES DE L'OFFICE D'ESSAI (OFES)",
+              "3ème TRIMESTRE 2099", "KONE Awa", "Administrateur des Services Financiers"):
+        d.add_paragraph(t)
+    d.add_paragraph("INTRODUCTION").runs[0].bold = True
+    d.add_paragraph("L'Office d'Essai a été créé par décret n°2090-12 du 2 mai 2090. Le présent rapport présente la "
+                    "situation d'exécution du budget au 3ème trimestre de l'exercice 2098. Il suit le plan ci-après :")
+    d.add_heading("PLAN DU RAPPORT", 1)
+    for t in ("I - Présentation du budget", "II - Analyse de l'exécution du budget", "III - Difficultés et suggestions",
+              "Conclusion"):
+        d.add_paragraph(t).runs[0].bold = True
+    d.add_heading("PRESENTATION DU BUDGET", 1)
+    d.add_paragraph("I.1- Présentation du budget").runs[0].bold = True
+    d.add_paragraph("Tableau 2 : Variation du budget global par rapport à l'exercice précédent")
+    tab = d.add_table(rows=0, cols=5)
+    for row in (["", "Budget 2098", "Budget 2099", "Montant", "Taux Variations"],
+                ["Recettes", "500 000 000", "450 000 000", "50 000 000", "10%"],
+                ["Dépenses", "500 000 000", "450 000 000", "50 000 000", "10%"]):
+        cells = tab.add_row().cells
+        for j, v in enumerate(row):
+            cells[j].text = v
+    d.add_paragraph("Source : état d'exécution")
+    d.add_paragraph("Le budget diminue de 50 000 000 FCFA. Aucune variation des dotations au 2ème trimestre 2099.")
+    d.add_heading("ANALYSE DE L'EXECUTION DU BUDGET", 1)
+    d.add_paragraph("II.2- Analyse de l'exécution du budget en dépenses").runs[0].bold = True
+    tab = d.add_table(rows=0, cols=5)
+    for row in (["Natures de dépense/ Activités", "Budget initial", "Budget final", "Exécutions", "Taux d'Exécutions %"],
+                ["1 Personnel", "50 000 000", "50 000 000", "0", "0"],
+                ["2 Biens et services", "", "", "", ""],
+                ["90042200031 Assurer la gouvernance", "400 000 000", "400 000 000", "200 000 000", "50,00"],
+                ["Total général", "450 000 000", "450 000 000", "200 000 000", "44,44"]):
+        cells = tab.add_row().cells
+        for j, v in enumerate(row):
+            cells[j].text = v
+    d.add_paragraph("Le taux d'exécution des dépenses est de 44,44 %, en ligne avec les prévisions de l'Office.")
+    d.add_heading("DIFFICULTES ET SUGGESTIONS", 1)
+    d.add_paragraph("La principale difficulté demeure le retard des transferts de l'Etat.")
+    d.add_heading("CONCLUSION", 1)
+    d.add_paragraph("Globalement, le taux d'exécution des dépenses est de 44,44 % au 30 septembre 2099.")
+    d.save(chemin)
+    return chemin
+
+
+def test_rapport_hors_canevas(tmp_path):
+    r = analyser(_rapport_libre(tmp_path / "libre.docx"))
+    assert r.infos.controleur == "KONE Awa"  # page de garde
+    assert r.periode.trimestre == 3
+    # le plan annoncé n'est pas pris pour les vrais titres
+    assert r.structure["presentation_budget"].titre == "PRESENTATION DU BUDGET"
+    assert r.structure["pres_generale"].trouvee
+    assert statut(r, "exec_depenses") == "Conforme"
+    # tableau d'exécution sans titre reconnu ; ligne « 1 Personnel » chiffrée sans détail comptée dans le total
+    assert "T6" in r.tableaux.par_code
+    controles = {c.controle: c for c in r.constats}
+    assert not any(c.controle.startswith("Total") for c in r.constats), [c.message for c in r.constats]
+    # baisse présentée sans signe : anomalie mineure (et non erreur de calcul majeure)
+    assert controles["Signe de la variation"].gravite == "Mineure"
+    assert "Variation = N − (N−1)" not in controles
+    assert "Budget N identique dans les tableaux 1 et 2" not in controles  # lignes Recettes/Dépenses non additionnées
+    # copier-coller d'un rapport antérieur
+    assert controles["Exercice cité conforme à la période"].constate == "2098"
+    assert "Trimestre cité conforme à la période" in controles

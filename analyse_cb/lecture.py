@@ -292,12 +292,15 @@ def _marquer_sommaire(doc: DocumentRapport) -> None:
             b.sommaire = True
         elif re.search(r"(\.{4,}|…{2,}|_{4,})\s*\d{1,3}\s*$", b.texte):
             b.sommaire = True
-        elif ((re.search(r"[.…_]{2,}[.…_,/ ]{4,}", b.texte) or re.search(r"[.…_]{3,}\s*\S{0,4}\s*$", b.texte))
+        elif ((re.search(r"[.…_]{2,}[.…_,/ ]{4,}", b.texte)
+               or re.search(r"(?:[.…_]{4,}\s*\S{0,4}|[.…_]{3,}\s*\d{1,3})\s*$", b.texte))  # pas « etc... »
               and len(b.texte) < 200
               and (b.page is None or b.page <= 5)):  # points de conduite lus par OCR
             b.sommaire = True
         elif re.search(r"\t\s*\d{1,3}\s*$", b.texte) and len(b.texte) < 150:
             b.sommaire = True
+        if re.match(r"^\W*(plan du rapport|plan de redaction|plan|plan adopte)\W*$", n):
+            _marquer_plan(paragraphes, i)
         if n in ("table des matieres", "sommaire", "liste des tableaux", "liste des sigles et abreviations"):
             b.sommaire = True
             # Zone de sommaire : lignes suivantes terminées par un numéro de page.
@@ -313,6 +316,30 @@ def _marquer_sommaire(doc: DocumentRapport) -> None:
                     sans_numero += 1
                     if sans_numero >= 3:
                         break
+
+
+def _marquer_plan(paragraphes: list[Bloc], i: int) -> None:
+    """« PLAN DU RAPPORT » annoncé dans le corps (sans numéros de page) : ses lignes ne sont pas de vrais titres.
+
+    La zone s'arrête à la première ligne longue (paragraphe), au premier changement de style de titre
+    (le plan est en texte simple alors que les parties sont en « Titre 1 ») ou après l'entrée « Conclusion ».
+    """
+    paragraphes[i].sommaire = True
+    style_plan = None
+    for suivant in paragraphes[i + 1:i + 60]:
+        t = suivant.texte.strip()
+        if not t:
+            continue
+        if len(t) > 130 or re.search(r"[.!?]\s*$", t) and len(t) > 60:
+            break
+        style = suivant.niveau_titre
+        if style_plan is None:
+            style_plan = style
+        elif style != style_plan and style is not None:
+            break
+        suivant.sommaire = True
+        if re.match(r"^\W*([ivxl\d]+\W+)?conclusion", suivant.norm):
+            break
 
 
 def _associer_legendes(doc: DocumentRapport) -> None:

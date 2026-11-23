@@ -87,12 +87,15 @@ RUBRIQUES: list[Rubrique] = [
     # ------------------------------------------------------------------ I. PRESENTATION DU BUDGET
     R("presentation_budget", "Présentation du budget", 1, titres=(r"presentation (generale )?du budget",),
       ligne_forme=31, mots_min=40),
-    R("pres_generale", "Présentation générale", 2, "presentation_budget", titres=(r"presentation .en.rale",),
+    R("pres_generale", "Présentation générale", 2, "presentation_budget",
+      titres=(r"presentation .en.rale", r"^presentation du budget( de l.epn| global)?$"),
       ligne_forme=32),
     R("pres_ressources", "Présentation des Ressources", 2, "presentation_budget",
-      titres=(r"presentation des ressources", r"^\W*(i\.?\s*2\W*)?(les )?ressources\b"), ligne_forme=33),
+      titres=(r"presentation des ressources", r"^\W*(i\.?\s*2\W*)?(les )?ressources\b",
+              r"presentation .{0,30}(nature|sources?) de (recettes|ressources|financement)"), ligne_forme=33),
     R("pres_emplois", "Présentation des Emplois", 2, "presentation_budget",
-      titres=(r"presentation des (emplois|depenses|charges)", r"^\W*(i\.?\s*3\W*)?(les )?emplois\b"),
+      titres=(r"presentation des (emplois|depenses|charges)", r"^\W*(i\.?\s*3\W*)?(les )?emplois\b",
+              r"presentation .{0,30}nature de depenses?"),
       ligne_forme=34),
 
     # ------------------------------------------------------------------ II. ANALYSE DE L'EXECUTION
