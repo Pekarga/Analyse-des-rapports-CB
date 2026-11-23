@@ -55,18 +55,20 @@ def _ecrire_long(ws, ligne: int, texte: str, derniere_ligne: int | None = None, 
         ws.row_dimensions[ligne].height = hauteur
 
 
-def _ajuster_texte(ws, ligne: int, texte: str, colonnes: str = "ABCDE") -> None:
+def _ajuster_texte(ws, ligne: int, texte: str, colonnes: str = "ABCDE", derniere: int | None = None) -> None:
     """Hauteur de ligne (et au besoin taille de police) pour qu'un texte rédigé tienne entièrement dans la cellule
     fusionnée : Excel limite la hauteur d'une ligne à 409 points."""
     import math
     largeur = sum(ws.column_dimensions[c].width or 9 for c in colonnes)
+    nb_lignes = (derniere or ligne) - ligne + 1
     for taille in (10, 9.5, 9, 8.5, 8):
         car_par_ligne = largeur * 1.2 * 11 / taille
         nb = sum(max(1, math.ceil(len(p) / car_par_ligne)) for p in texte.split("\n"))
         hauteur = nb * taille * 1.35 + 6
-        if hauteur <= 409:
+        if hauteur <= 409 * nb_lignes:
             break
-    ws.row_dimensions[ligne].height = min(409, hauteur)
+    for r in range(ligne, ligne + nb_lignes):
+        ws.row_dimensions[r].height = min(409, max(15, hauteur / nb_lignes))
     ws[f"A{ligne}"].font = Font(name="Calibri", size=taille)
     ws[f"A{ligne}"].alignment = Alignment(wrap_text=True, vertical="top", horizontal="justify")
 
@@ -164,18 +166,10 @@ def remplir_modele(res: ResultatAnalyse, sortie: str | Path, modele: str | Path 
     dv_fond_f.add("C83:C123")
     dv_fond_c.add("D83:D123")
     _mettre_en_forme_statuts(ws, "C83:D123")
-    majeures = [c for c in res.constats if c.gravite == "Majeure"]
-    synthese_fond = (f"Taux de fiabilité/cohérence sur les points vérifiables : "
-                     + (f"{res.score_fond:.0f} % – {res.mention(res.score_fond)}" if res.score_fond is not None else "non évaluable")
-                     + f". {len(res.constats)} constat(s) automatique(s) dont {len(majeures)} majeur(s) "
-                     "(détail dans l'onglet « Contrôles automatiques »).")
-    if majeures:
-        from .analyse import _court
-        synthese_fond += "\nPrincipaux constats : " + " | ".join(_court(c, 200) for c in principaux_constats(res, 6))
-    synthese_fond += f"\nDécret de création et d'organisation : {res.appreciation_decret}."
-    synthese_fond += f"\nSituation d'exécution : {res.appreciation_situation}"
-    synthese_fond += "\nLes rubriques « À apprécier » nécessitent une lecture qualitative du Chargé d'Études."
-    _ecrire_long(ws, 127, synthese_fond, hauteur=_hauteur(synthese_fond, 95, 45))
+    from .redaction import appreciation_fond
+    synthese_fond = MENTION_AUTO + "\n" + appreciation_fond(res)
+    _ecrire_long(ws, 127, synthese_fond)
+    _ajuster_texte(ws, 127, synthese_fond)
 
     # ---------------------------------------------------------------- IV. difficultés et suggestions
     lignes_diff = {"execution": 136, "controle": 138, "gestion": 140}
@@ -209,10 +203,10 @@ def remplir_modele(res: ResultatAnalyse, sortie: str | Path, modele: str | Path 
                     "Aucune suggestion n'a été extraite."), hauteur=30)
 
     # ---------------------------------------------------------------- V. appréciation générale
-    projet = projet_appreciation(res)
+    from .redaction import appreciation_generale
+    projet = MENTION_AUTO + "\n" + appreciation_generale(res)
     _ecrire_long(ws, 166, projet, 178)
-    for r in range(166, 179):
-        ws.row_dimensions[r].height = max(15, _hauteur(projet, 95) / 13)
+    _ajuster_texte(ws, 166, projet, derniere=178)
     suite = suite_a_donner(res)
     _ecrire_long(ws, 181, suite, 183)
     ws.print_area = "A1:E184"
@@ -360,9 +354,11 @@ def suite_a_donner(res: ResultatAnalyse) -> str:
     seuil = res.parametres.get("appreciation", {}).get("retour_cb_si_score_forme_inferieur_a", 75)
     if res.score_forme < seuil or res.nb_anomalies_majeures >= res.parametres.get("appreciation", {}).get(
             "retour_cb_si_anomalies_majeures", 3):
-        return (f"Proposition : retourner le rapport au Contrôleur Budgétaire pour correction et complétude "
-                f"(conformité de forme {res.score_forme:.0f} %, {res.nb_anomalies_majeures} anomalie(s) majeure(s)).")
-    return "Proposition : rapport exploitable, à intégrer dans la synthèse des rapports des CB (sous réserve des points à vérifier)."
+        return (f"Au regard des insuffisances relevées, tant sur la forme (taux de conformité de {res.score_forme:.0f} %) "
+                f"que sur le fond ({res.nb_anomalies_majeures} anomalies majeures), il est proposé de retourner le rapport "
+                "au Contrôleur Budgétaire aux fins de correction et de complétude.")
+    return ("Le rapport est jugé exploitable et peut être intégré à la synthèse des rapports des Contrôleurs Budgétaires, "
+            "sous réserve de la prise en compte des observations formulées.")
 
 
 # ------------------------------------------------------------------ onglets de détail

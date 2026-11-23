@@ -324,7 +324,8 @@ def test_excel_references(res_anomalies_ref, tmp_path):
     assert {"Décret de création", "Situation d'exécution"} <= set(wb.sheetnames)
     assert wb.worksheets[0]["D86"].value == "Incohérent"  # missions
     assert wb.worksheets[0]["C98"].value == "Non fiable"  # exécution en dépenses
-    assert "Situation d'exécution" in wb.worksheets[0]["A127"].value
+    assert "rapprochement avec la situation d'exécution" in wb.worksheets[0]["A127"].value
+    assert "- " not in wb.worksheets[0]["A166"].value  # appréciation générale rédigée, sans tirets
     valeurs = [c.value for row in wb["Situation d'exécution"].iter_rows() for c in row]
     assert "Écart" in valeurs and "Concordant" in valeurs
     tdb = openpyxl.load_workbook(tableau_de_bord([(res_anomalies_ref, sortie)], tmp_path / "tdb.xlsx")).active

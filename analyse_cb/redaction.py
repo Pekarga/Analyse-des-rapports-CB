@@ -288,9 +288,292 @@ def appreciation_forme(res) -> str:
         conclusion = ("Au regard de ce qui précède, la forme du rapport appelle des améliorations substantielles. "
                       + (f"Il est recommandé au Contrôleur Budgétaire {enumerer(_de(recos))}." if recos else ""))
     paragraphes.append(conclusion.strip())
-    return "\n\n".join(p for p in paragraphes if p)
+    return "\n".join(p for p in paragraphes if p)
 
 
 def _de(actions: list[str]) -> list[str]:
     """« se conformer », « indiquer » → « de se conformer », « d'indiquer »."""
     return [("d'" + a) if re.match(r"^[aeiouyéèêh]", a, re.I) else ("de " + a) for a in actions]
+
+
+# ------------------------------------------------------------------ outils communs
+def _fcfa(v) -> str:
+    from .texte import format_montant
+    return f"{format_montant(v)} FCFA"
+
+
+def _tableau_court(nom: str) -> str:
+    """« Tableau 6 (Exécution du budget en dépenses) » → « tableau n°6 (exécution du budget en dépenses) »."""
+    m = re.match(r"^Tableau (\d+) \((.+)\)$", nom or "")
+    if m:
+        return f"tableau n°{m.group(1)} ({_min(m.group(2))})"
+    return nom or "rapport"
+
+
+def _phrase(texte: str) -> str:
+    texte = texte.strip()
+    return texte if texte.endswith(".") else texte + "."
+
+
+def _mention(res, score, masculin: bool = False) -> str:
+    m = res.mention(score)
+    return m.lower() if masculin else MENTIONS.get(m, m.lower())
+
+
+THEMES = {"Missions": "les missions", "Organes de l'EPN": "les organes", "Tutelle technique": "la tutelle technique",
+          "Mode de financement": "le mode de financement", "Référence du texte de création": "la référence du texte de création",
+          "Siège": "le siège", "Antennes / implantations": "les implantations",
+          "Sessions du Conseil de gestion": "les sessions du Conseil de gestion",
+          "Ressources budgétées": "les ressources budgétées"}
+
+
+def _ecart_decret(p) -> str:
+    """Formulation administrative d'un écart relevé par rapport au décret."""
+    if p.theme.startswith("Référence du texte"):
+        m = re.search(r"le n°([\w\-/]+), alors que le décret de création est le n°([\w\-/]+)", p.constat)
+        if m:
+            return f"le texte de création y est cité sous le n°{m.group(1)} au lieu du n°{m.group(2)}"
+        return "le texte de création n'y est pas correctement référencé"
+    return {"Missions": "les missions de l'établissement n'y sont que partiellement rappelées",
+            "Mode de financement": "le mode de financement de l'établissement n'est pas présenté dans l'introduction",
+            "Organes de l'EPN": "certains organes prévus par le décret n'y sont pas évoqués",
+            "Sessions du Conseil de gestion": "la périodicité des sessions du Conseil de gestion n'est pas respectée",
+            "Ressources budgétées": "des ressources non prévues par le décret sont inscrites au budget",
+            }.get(p.theme, _min(p.constat.rstrip(".")))
+
+
+def _ecart_num(c) -> float:
+    from .texte import lire_nombre
+    a, b = lire_nombre(c.attendu), lire_nombre(c.constate)
+    return abs(a - b) if a is not None and b is not None else 0.0
+
+
+def _ex_calcul(c) -> str:
+    colonne = re.search(r"\(colonne ([^)]+)\)", c.message)
+    ligne = f"la ligne « {c.ligne} »" if c.ligne and not c.ligne.startswith(("Total", "total")) else (
+        "le total général" if c.ligne.lower().startswith("total") else "une ligne")
+    return (f"au {_tableau_court(c.tableau)}, {ligne}" + (f" ({colonne.group(1)})" if colonne else "")
+            + f" affiche {c.constate}{' FCFA' if re.search(r'\d{3}$', c.constate or '') else ''} alors que "
+            f"{'la somme des lignes' if c.controle.startswith(('Total', 'Sous-total')) else 'le montant recalculé'} s'établit à {c.attendu}{' FCFA' if re.search(r'\d{3}$', c.attendu or '') else ''}")
+
+
+# ------------------------------------------------------------------ fond
+def appreciation_fond(res) -> str:
+    cs = res.constats
+    majeures = [c for c in cs if c.gravite == "Majeure"]
+    paragraphes = []
+    if res.score_fond is not None:
+        p = (f"Sur le fond, l'examen du rapport fait ressortir un niveau de fiabilité et de cohérence jugé "
+             f"{_mention(res, res.score_fond, masculin=True)} ({res.score_fond:.0f} % des points vérifiables). ")
+    else:
+        p = "Sur le fond, aucun point n'a pu être vérifié de manière automatique. "
+    p += (f"Les contrôles effectués ont mis en évidence {nombre(len(cs), True)} anomalies, parmi lesquelles "
+          f"{nombre(len(majeures), True)} de caractère majeur ; leur détail figure à l'onglet « Contrôles automatiques »." if cs else
+          "Les contrôles effectués n'ont révélé aucune anomalie.")
+    paragraphes.append(p)
+
+    # Fiabilité
+    calc = [c for c in res.tableaux.constats if c.nature == "fiabilite"
+            and not c.controle.startswith(("Signe", "Base de calcul", "Codes d'activité"))]
+    presentation = [c for c in res.tableaux.constats if c.controle.startswith(("Signe", "Base de calcul"))]
+    if calc:
+        types = []
+        for motif, libelle in ((r"^(Total|Sous-total)", "les totaux et sous-totaux"), (r"^Taux", "les taux"),
+                               (r"Disponible|Écart =", "les disponibles"), (r"^Variation", "les variations"),
+                               (r"^Montant actuel", "les montants après modification")):
+            if any(re.search(motif, c.controle) for c in calc):
+                types.append(libelle)
+        principaux = [c for c in calc if c.gravite == "Majeure" and not c.tableau.startswith("«")] or calc
+        # l'erreur la plus significative, de préférence sur les montants d'exécution
+        exemple = max(principaux, key=lambda c: (bool(re.search(r"colonne (réalisation|prises en charge|recouvrement)", c.message)),
+                                                 _ecart_num(c)))
+        p = (f"Au titre de la fiabilité, les tableaux comportent {nombre(len(calc), True)} erreurs de calcul portant "
+             f"notamment sur {enumerer(types) or 'les montants présentés'} ; à titre d'exemple, {_ex_calcul(exemple)}.")
+        if presentation:
+            p += (" Des anomalies de présentation sont également relevées, telles que des baisses présentées sans signe "
+                  "négatif ou des taux calculés sur une base différente de celle prescrite par le canevas.")
+        paragraphes.append(p)
+    elif res.tableaux.par_code:
+        paragraphes.append("Au titre de la fiabilité, les calculs des tableaux ont été vérifiés sans anomalie.")
+
+    # Cohérence
+    controles = {c.controle: c for c in cs}
+    coh = []
+    eq = next((c for c in cs if c.controle.startswith("Équilibre budgétaire")), None)
+    if eq:
+        coh.append(f"les ressources ({eq.constate} FCFA) et les emplois ({eq.attendu} FCFA) présentés ne sont pas équilibrés")
+    if any(c.startswith("Même répartition par nature") for c in controles):
+        coh.append("la répartition des crédits par nature de dépense diffère entre la présentation des emplois et "
+                   "l'exécution des dépenses")
+    if any(c.startswith("Budget N") for c in controles):
+        coh.append("les montants du budget diffèrent d'un tableau à l'autre")
+    if any("cité" in c and c.startswith("Cohérence du taux") for c in controles):
+        coh.append("certains taux cités dans le texte ne correspondent pas à ceux des tableaux")
+    if "Sens du résultat budgétaire" in controles:
+        coh.append("le sens du résultat budgétaire indiqué dans le texte est erroné")
+    if {"Exercice cité conforme à la période", "Trimestre cité conforme à la période"} & controles.keys():
+        coh.append("le texte comporte des références à une autre période, vraisemblablement reprises d'un rapport antérieur")
+    if "Événements datés dans la période" in controles:
+        coh.append("des événements présentés comme survenus au cours de la période sont datés en dehors de celle-ci")
+    if "Codes d'activité uniques" in controles:
+        coh.append("des codes d'activité sont erronés ou attribués à plusieurs activités")
+    if coh:
+        paragraphes.append(f"Au titre de la cohérence, il apparaît que {enumerer(coh)}.")
+
+    # Décret
+    if res.confrontation:
+        from .decret import CONFORME as D_OK, ECART as D_ECART
+        ok = [THEMES.get(p.theme, _min(p.theme)) for p in res.confrontation.points if p.statut == D_OK]
+        ec = [p for p in res.confrontation.points if p.statut == D_ECART]
+        p = f"La confrontation du rapport avec le {res.decret.reference.replace('Décret', 'décret')} portant création de l'établissement "
+        p += (f"en atteste la conformité en ce qui concerne {enumerer(ok)}" if ok else "ne permet de valider aucun élément")
+        p += (" ; elle révèle en revanche que " + enumerer([_ecart_decret(x) for x in ec]) + "." if ec else ".")
+        paragraphes.append(p)
+
+    # Situation d'exécution
+    rap = res.rapprochement
+    if rap:
+        d = res.situation.date_arrete
+        concordants = [l for l in rap.lignes if l.statut == "Concordant"]
+        decales = [l for l in rap.lignes if l.statut == "Écart (décalage de date)"]
+        p = (f"Le rapprochement avec la situation d'exécution issue du système d'information budgétaire"
+             + (f", arrêtée au {d:%d/%m/%Y}," if d else "") + f" confirme {nombre(len(concordants))} des "
+             f"{nombre(len([l for l in rap.lignes if l.statut != 'Non comparable']))} agrégats comparés"
+             + (f", {nombre(len(decales))} autres présentant des écarts susceptibles de résulter du décalage de date"
+                if decales else ""))
+        impossibles = [l for l in rap.detail + rap.lignes if "impossible" in l.note]
+        budget = next((l for l in rap.lignes if l.libelle == "Budget actuel de dépenses" and l.statut == "Écart"), None)
+        constats_sit = []
+        if impossibles:
+            ex = next((l for l in impossibles if l.code), impossibles[0])
+            constats_sit.append("certains montants d'exécution du rapport excèdent ceux de la situation de référence, "
+                                "pourtant postérieure, ce qui atteste leur inexactitude "
+                                f"(à titre d'exemple, {(('activité ' + ex.code) if ex.code else _min(ex.libelle))} : "
+                                f"{_fcfa(ex.rapport)} contre {_fcfa(ex.situation)})")
+        if budget:
+            constats_sit.append(f"le budget actuel des dépenses est présenté pour {_fcfa(budget.rapport)} au lieu de "
+                                f"{_fcfa(budget.situation)}, les mesures de régulation n'ayant pas été répercutées")
+        autres = [l for l in rap.detail if l.statut == "Écart" and "impossible" not in l.note]
+        if autres and not budget:
+            constats_sit.append(f"{nombre(len(autres))} montants par ligne ne concordent pas avec la situation de référence")
+        p += (" ; il fait toutefois apparaître que " + enumerer(constats_sit) + "." if constats_sit else ".")
+        if rap.date_conforme is False and d:
+            p += (f" Cette situation n'étant pas arrêtée à la date de fin de période ({res.periode.fin:%d/%m/%Y}), les "
+                  "écarts de faible ampleur demeurent à confirmer.")
+        paragraphes.append(p)
+
+    # Rubriques non appréciables
+    absentes = [_guillemets(l.libelle.strip(" -")) for l in res.fond if l.ligne and l.fiabilite == "Non renseigné"]
+    if absentes:
+        paragraphes.append(f"Enfin, {nombre(len(absentes), True)} rubriques étant absentes ou non renseignées, "
+                           "leur fond n'a pu être apprécié ; les rubriques présentes appellent par ailleurs une "
+                           "appréciation qualitative du Chargé d'Études.")
+    return "\n".join(paragraphes)
+
+
+# ------------------------------------------------------------------ appréciation générale (partie V)
+def appreciation_generale(res) -> str:
+    from .decret import CONFORME as D_OK, ECART as D_ECART
+    lignes = {l.code: l for l in res.forme}
+    fond = (f" et le fond une appréciation {_mention(res, res.score_fond)} ({res.score_fond:.0f} % des points vérifiables)"
+            if res.score_fond is not None else "")
+    p1 = (f"Au terme de son examen, le rapport du Contrôleur Budgétaire placé auprès de {_epn(res)}, afférent "
+          f"{periode_phrase(res)}, appelle quant à la forme une appréciation {_mention(res, res.score_forme)} "
+          f"({res.score_forme:.0f} % de conformité au canevas){fond}.")
+    e = res.ecart_jours
+    p1 += (" La date de réception par la DCB n'étant pas renseignée, le respect du délai de transmission reste à apprécier."
+           if e is None else " Le rapport a été transmis dans les délais." if e <= 0
+           else f" Le rapport a été transmis avec un retard de {nombre(e)} jour{'s' if e > 1 else ''}.")
+
+    # Points positifs
+    forts = []
+    if res.score_forme >= 90:
+        forts.append("le canevas de rédaction est globalement respecté")
+    if res.confrontation:
+        ok = [THEMES.get(p.theme, _min(p.theme)) for p in res.confrontation.points if p.statut == D_OK]
+        if ok:
+            forts.append(f"la présentation de l'établissement est conforme au décret de création en ce qui concerne {enumerer(ok)}")
+    if res.rapprochement:
+        def sens(l):
+            return "recettes" if re.search(r"recette|ressource|recouvr", l.libelle, re.I) else "dépenses"
+        statut = {}
+        for l in res.rapprochement.lignes + res.rapprochement.detail:
+            if l.statut in ("Concordant", "Écart") and not l.libelle.startswith("Résultat"):
+                cle = sens(l) if not l.code else ("recettes" if len(l.code) == 6 and l.code.startswith("7") else "dépenses")
+                statut.setdefault(cle, set()).add(l.statut)
+        complets = [k for k in ("recettes", "dépenses") if statut.get(k) == {"Concordant"}]
+        partiels = [k for k in ("recettes", "dépenses") if statut.get(k, set()) >= {"Concordant", "Écart"}]
+        blocs = ([f"l'ensemble des données de {' et de '.join(complets)}"] if complets else []) + \
+                ([f"une partie des données de {' et de '.join(partiels)}"] if partiels else [])
+        if blocs:
+            forts.append(f"{enumerer(blocs)} concordent avec la situation d'exécution de référence")
+    if res.tableaux.par_code and not [c for c in res.tableaux.constats if c.nature == "fiabilite"]:
+        forts.append("les tableaux chiffrés sont arithmétiquement justes")
+    if lignes.get("signature") and lignes["signature"].statut == CONFORME:
+        forts.append("le rapport est dûment daté et signé")
+    p2 = (f"Au titre des points positifs, il convient de relever que {enumerer(forts)}." if forts
+          else "L'examen ne fait ressortir aucun point positif particulier.")
+
+    # Insuffisances
+    faibles = []
+    nb_rub = sum(1 for l in res.forme if l.statut == NON_CONFORME and l.code in PAR_CODE and not PAR_CODE[l.code].cas_echeant)
+    nb_tab = sum(1 for c in TABLEAU_PAR_CODE if c in lignes and lignes[c].statut == NON_CONFORME)
+    if nb_rub or nb_tab:
+        faibles.append("le canevas n'est pas intégralement respecté, "
+                       + enumerer(([f"{nombre(nb_rub, True)} rubriques obligatoires"] if nb_rub else [])
+                                  + ([f"{nombre(nb_tab)} tableau{'x' if nb_tab > 1 else ''} prescrit{'s' if nb_tab > 1 else ''}"] if nb_tab else []))
+                       + (" faisant défaut" if (nb_rub + nb_tab) > 1 else " faisant défaut"))
+    calc = [c for c in res.tableaux.constats if c.nature == "fiabilite" and c.gravite == "Majeure"]
+    if calc:
+        faibles.append(f"les tableaux comportent {nombre(len(calc), True)} erreurs de calcul majeures")
+    coh = [c for c in res.constats if c.nature == "coherence" and c.gravite != "Information"]
+    if coh:
+        faibles.append(f"{nombre(len(coh), True)} incohérences affectent les données présentées, entre tableaux ou entre "
+                       "le texte et les tableaux")
+    if res.confrontation:
+        ec = [p for p in res.confrontation.points if p.statut == D_ECART]
+        ref = next((p for p in ec if p.theme.startswith("Référence du texte")), None)
+        if ref:
+            faibles.append(f"le texte de création est mal référencé, le décret applicable étant le "
+                           f"{res.decret.reference.replace('Décret ', '')}")
+        if [p for p in ec if p is not ref]:
+            faibles.append("le cadre institutionnel de l'EPN n'est pas fidèlement rappelé ("
+                           + enumerer([p.theme.lower() for p in ec if p is not ref]) + ")")
+        if any(p.rubrique == "coges" and "aucune session" in p.constat for p in res.confrontation.points):
+            faibles.append("l'absence de toute session du Conseil de gestion n'est pas analysée au regard de ses "
+                           "conséquences sur la gouvernance de l'établissement")
+    rap = res.rapprochement
+    budget = None
+    if rap:
+        if any("impossible" in l.note for l in rap.detail + rap.lignes):
+            faibles.append("certains montants d'exécution sont démentis par la situation d'exécution de référence")
+        budget = next((l for l in rap.lignes if l.libelle == "Budget actuel de dépenses" and l.statut == "Écart"), None)
+        if budget:
+            faibles.append("les mesures de régulation budgétaire ne sont pas répercutées dans la présentation des dépenses")
+    if lignes.get("signature") and lignes["signature"].statut == NON_CONFORME:
+        faibles.append("le rapport n'est ni daté ni signé")
+    p3 = ("Le rapport présente toutefois des insuffisances notables : " + "; ".join(faibles).replace(";", " ;") + "."
+          if faibles else "Aucune insuffisance majeure n'a été relevée.")
+
+    # Recommandations
+    recos = []
+    if nb_rub or nb_tab:
+        recos.append("se conformer strictement au canevas en vigueur")
+    if calc or coh:
+        recos.append("fiabiliser les données chiffrées en vérifiant les calculs et la concordance des tableaux et des commentaires")
+    if res.confrontation and any(p.statut == D_ECART for p in res.confrontation.points):
+        recos.append(f"rappeler fidèlement le cadre institutionnel de l'établissement, en visant le {res.decret.reference.replace('Décret', 'décret')}")
+    if rap and (any("impossible" in l.note for l in rap.detail + rap.lignes) or budget):
+        recos.append("établir les tableaux d'exécution à partir de la situation du système d'information budgétaire "
+                     "arrêtée à la fin de la période" + (", sur la base du budget actuel" if budget else ""))
+    if {"Exercice cité conforme à la période", "Trimestre cité conforme à la période"} & {c.controle for c in res.constats}:
+        recos.append("actualiser les mentions de période reprises de rapports antérieurs")
+    if lignes.get("signature") and lignes["signature"].statut == NON_CONFORME:
+        recos.append("dater et signer le rapport")
+    if e is not None and e > 0:
+        recos.append("respecter les délais de transmission des rapports à la DCB")
+    p4 = (f"En conséquence, il est recommandé au Contrôleur Budgétaire {enumerer(_de(recos))}." if recos else "")
+    if rap and rap.date_conforme is False and res.situation.date_arrete:
+        p4 += (f" Il conviendrait par ailleurs que la DCB obtienne la situation d'exécution arrêtée au "
+               f"{res.periode.fin:%d/%m/%Y} afin de confirmer les écarts relevés.")
+    return "\n".join(p for p in (p1, p2, p3, p4.strip()) if p)
