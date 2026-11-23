@@ -1,7 +1,11 @@
 """Génère des rapports de CB FICTIFS au format du canevas 2023, pour tester l'outil.
 
 - rapport_exemple_conforme.docx : rapport complet, calculs justes ;
-- rapport_exemple_anomalies.docx : rubriques manquantes, erreurs de calcul, incohérences, non daté.
+- rapport_exemple_anomalies.docx : rubriques manquantes, erreurs de calcul, incohérences, non daté ;
+- decret_creation_ANEX.pdf : décret FICTIF de création et d'organisation de l'EPN ;
+- situation_execution_30062099.xlsx : situation d'exécution FICTIVE consolidée (plusieurs EPN) au 30/06/2099,
+  concordante avec le rapport conforme ;
+- situation_execution_ecarts_30062099.xlsx : même situation, avec des écarts volontaires.
 
 Usage : python exemples/generer_exemple.py [dossier_sortie]
 """
@@ -137,12 +141,17 @@ def generer(sortie: Path, anomalies: bool) -> Path:
     d.add_heading("INTRODUCTION", 1)
     d.add_paragraph("L'Agence Nationale d'Exemple (ANEX) a été créée par le décret n°2099-001 du 01 janvier 2099 "
                     "portant création, attributions, organisation et fonctionnement de l'ANEX. "
-                    "Elle a pour missions de promouvoir les activités d'exemple et d'en assurer le suivi.")
+                    + ("Elle a pour missions de promouvoir les activités d'exemple et d'en assurer le suivi." if anomalies else
+                       "Elle a pour missions de promouvoir les activités d'exemple sur l'ensemble du territoire national, "
+                       "d'assurer le suivi et l'évaluation des activités d'exemple, et de conseiller le Gouvernement "
+                       "en matière d'exemple. Elle est placée sous la tutelle technique du Ministre chargé de l'Exemple."))
     if not anomalies:
         d.add_paragraph("L'ANEX dispose de trois antennes régionales installées à Bouaké, Korhogo et San Pedro.")
     d.add_paragraph("L'ANEX est financée par les subventions de l'Etat et par ses ressources propres issues "
                     "des prestations de services.")
-    d.add_paragraph("L'ANEX est organisée en quatre directions. Son effectif est de 120 agents au 30 juin 2099.")
+    d.add_paragraph("L'ANEX est organisée en quatre directions. Son effectif est de 120 agents au 30 juin 2099."
+                    + ("" if anomalies else " Ses organes sont le Conseil de gestion et la Direction générale, "
+                       "assistés d'un Agent comptable."))
     d.add_paragraph("Le présent rapport est produit conformément aux dispositions de l'article 66 du décret "
                     "n°2021-677 du 03 novembre 2021 portant régime financier et comptable des EPN. "
                     "Il s'articule autour des points suivants : la présentation du budget, l'analyse de son exécution, "
@@ -231,7 +240,8 @@ def generer(sortie: Path, anomalies: bool) -> Path:
 
     d.add_heading("VII. SITUATION DE LA GOUVERNANCE DE L'EPN", 1)
     d.add_heading("VII.1.1 COGES / Organes de supervision", 2)
-    d.add_paragraph("Le Conseil de gestion s'est réuni deux fois au cours du semestre, conformément à la périodicité.")
+    d.add_paragraph("Le Conseil de gestion ne s'est pas réuni au cours du semestre." if anomalies else
+                    "Le Conseil de gestion s'est réuni deux fois au cours du semestre, conformément à la périodicité.")
     d.add_heading("VII.1.2 Comité de trésorerie", 2)
     d.add_paragraph("Le comité de trésorerie s'est réuni mensuellement et a examiné les stratégies de mobilisation.")
 
@@ -264,7 +274,105 @@ def generer(sortie: Path, anomalies: bool) -> Path:
     return chemin
 
 
+DECRET = [
+    "REPUBLIQUE D'EXEMPLE",
+    "DECRET N° 2099-001 DU 01 JANVIER 2099 portant création, attributions, organisation et fonctionnement de "
+    "l'Agence Nationale d'Exemple, en abrégé ANEX",
+    "CHAPITRE 1 : DISPOSITIONS GENERALES",
+    "Article 1 : Il est créé un Etablissement Public National à caractère administratif dénommé « Agence Nationale "
+    "d'Exemple », en abrégé « ANEX ».",
+    "Article 2 : L'ANEX est placée sous la tutelle technique du Ministre chargé de l'Exemple et sous la tutelle "
+    "économique et financière du Ministre chargé du Budget.",
+    "Article 3 : Le siège de l'ANEX est fixé à Abidjan. Des antennes régionales peuvent être créées par décision du "
+    "Conseil de gestion.",
+    "CHAPITRE 2 : MISSIONS",
+    "Article 4 : L'ANEX a pour missions :",
+    "- de promouvoir les activités d'exemple sur l'ensemble du territoire national ;",
+    "- d'assurer le suivi et l'évaluation des activités d'exemple ;",
+    "- de conseiller le Gouvernement en matière d'exemple.",
+    "CHAPITRE 3 : ORGANISATION ET FONCTIONNEMENT",
+    "Article 5 : Les organes de l'ANEX sont :",
+    "- le Conseil de gestion ;",
+    "- la Direction générale.",
+    "Article 6 : Le Conseil de gestion se réunit en session ordinaire deux fois par an, sur convocation de son Président.",
+    "Article 7 : La Direction générale est dirigée par un Directeur Général nommé par décret pris en Conseil des Ministres.",
+    "CHAPITRE 4 : DISPOSITIONS FINANCIERES",
+    "Article 8 : Les ressources de l'ANEX sont constituées par :",
+    "- les subventions de l'Etat ;",
+    "- les produits des prestations de services ;",
+    "- les dons et legs.",
+    "Article 9 : Un Agent comptable et un Contrôleur budgétaire sont nommés auprès de l'ANEX conformément au décret "
+    "n°2021-677 du 03 novembre 2021.",
+]
+
+
+def generer_decret(sortie: Path) -> Path:
+    """Décret FICTIF au format PDF (texte)."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+
+    sortie.mkdir(parents=True, exist_ok=True)
+    chemin = sortie / "decret_creation_ANEX.pdf"
+    styles = getSampleStyleSheet()
+    elements = []
+    for ligne in DECRET:
+        elements += [Paragraph(ligne.replace("&", "&amp;"), styles["Normal"]), Spacer(1, 6)]
+    SimpleDocTemplate(str(chemin), pagesize=A4).build(elements)
+    return chemin
+
+
+def generer_situation(sortie: Path, ecarts: bool = False) -> Path:
+    """Situation d'exécution FICTIVE consolidée (colonne EPN) au 30/06/2099, au format Excel."""
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws_r = wb.active
+    ws_r.title = "Recettes"
+    ws_r.append(["Situation d'exécution du budget des EPN au 30/06/2099 – recettes"])
+    ws_r.append([])
+    ws_r.append(["EPN", "Code", "Libellé", "Prévision initiale", "Prévision finale", "Recouvrements"])
+    for lib, v in RESSOURCES:
+        if not isinstance(v, tuple):
+            continue
+        code = lib.split()[0]
+        fin = v[0] + v[1]
+        real = round(fin * TAUX_RECOUVREMENT[code])
+        if ecarts and code == "702900":
+            real += 4_000_000
+        ws_r.append(["ANEX", code, lib.split(" ", 1)[1], v[0], fin, real])
+    ws_r.append(["OFEX", "731300", "Transferts reçus du budget général", 90_000_000, 90_000_000, 45_000_000])
+    ws_d = wb.create_sheet("Dépenses")
+    ws_d.append(["Situation d'exécution du budget des EPN au 30/06/2099 – dépenses"])
+    ws_d.append([])
+    ws_d.append(["EPN", "Code activité", "Libellé", "Nature", "Crédits initiaux", "Budget actuel", "Engagements",
+                 "Liquidations", "Ordonnancements"])
+    nature = ""
+    for lib, v in EMPLOIS:
+        if v is None:
+            nature = lib.split(" ", 1)[1]
+            continue
+        if not isinstance(v, tuple):
+            continue
+        code = lib.split()[0]
+        act = v[0] + v[1]
+        ordo = round(act * TAUX_EXECUTION[code])
+        if ecarts and code == "90047300020":
+            ordo += 5_000_000
+        eng = min(act, round(ordo * 1.05))
+        ws_d.append(["ANEX", code, lib.split(" ", 1)[1], nature, v[0], act, eng, ordo, ordo])
+    ws_d.append(["OFEX", "90047300099", "Fonctionnement courant", "Biens et services", 90_000_000, 90_000_000,
+                 40_000_000, 35_000_000, 35_000_000])
+    sortie.mkdir(parents=True, exist_ok=True)
+    chemin = sortie / ("situation_execution_ecarts_30062099.xlsx" if ecarts else "situation_execution_30062099.xlsx")
+    wb.save(chemin)
+    return chemin
+
+
 if __name__ == "__main__":
     dossier = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).parent
     for anomalies in (False, True):
         print(generer(dossier, anomalies))
+    print(generer_decret(dossier))
+    print(generer_situation(dossier, False))
+    print(generer_situation(dossier, True))

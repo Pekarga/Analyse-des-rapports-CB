@@ -2,7 +2,9 @@
 # - denomination / sigle : servent à reconnaître l'EPN dans le rapport ;
 # - texte_creation : décret (ou loi) de création, ex. « Décret n°2015-123 du 04 mars 2015 » ;
 #   l'outil vérifie que ce texte est bien cité dans l'introduction du rapport ;
-# - controleur : nom du CB en poste (utilisé si le nom n'est pas trouvé dans le rapport).
+# - controleur : nom du CB en poste (utilisé si le nom n'est pas trouvé dans le rapport) ;
+# - fichier_decret / fichier_situation (facultatifs) : chemins du décret de création et de la situation
+#   d'exécution de l'EPN (relatifs au dossier config/), utilisés si aucun fichier n'est fourni à l'analyse.
 # Les lignes commençant par # sont ignorées. Exemple fictif ci-dessous, à remplacer par vos EPN.
-sigle;denomination;texte_creation;tutelle;controleur
-ANEX;Agence Nationale d'Exemple;Décret n°2099-001 du 01 janvier 2099;Ministère de l'Exemple;M. KOUASSI Exemple
+sigle;denomination;texte_creation;tutelle;controleur;fichier_decret;fichier_situation
+ANEX;Agence Nationale d'Exemple;Décret n°2099-001 du 01 janvier 2099;Ministère de l'Exemple;M. KOUASSI Exemple;;

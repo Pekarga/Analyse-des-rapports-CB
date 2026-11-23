@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
 
@@ -11,7 +11,10 @@ from .canevas import MARQUEURS_CANEVAS_2023, PAR_CODE, RUBRIQUES, TABLEAUX, enfa
 from .controles import (ControlesTransverses, Element, Periode, controle_signature, date_limite,
                         detecter_periode, extraire_difficultes_suggestions, identifier_controleur,
                         identifier_epn, lire_date, charger_referentiel)
+from .decret import ConfrontationDecret, Decret, choisir_decret, lire_decret
+from .decret import CONFORME as D_CONFORME, ECART as D_ECART
 from .lecture import DocumentRapport, lire_rapport
+from .situation import Rapprochement, SituationExecution, SourceSituation, charger_source, situation_pour
 from .structure import AnalyseStructure
 from .tableaux import Constat, ControleTableaux
 
@@ -77,11 +80,33 @@ class ResultatAnalyse:
     canevas_en_vigueur: tuple[str, str] = ("", "")
     difficultes: dict[str, list[Element]] = field(default_factory=dict)
     parametres: dict = field(default_factory=dict)
+    decret: Decret | None = None
+    confrontation: ConfrontationDecret | None = None
+    situation: SituationExecution | None = None
+    rapprochement: Rapprochement | None = None
 
     # -------------------------------------------------------------- indicateurs
     @property
     def constats(self) -> list[Constat]:
-        return self.tableaux.constats + self.transverses.constats
+        return (self.tableaux.constats + self.transverses.constats
+                + (self.confrontation.constats if self.confrontation else [])
+                + (self.rapprochement.constats if self.rapprochement else []))
+
+    @property
+    def appreciation_decret(self) -> str:
+        if not self.confrontation:
+            return "Décret non fourni"
+        pts = [p for p in self.confrontation.points if p.statut in (D_CONFORME, D_ECART)]
+        ecarts = [p.theme for p in pts if p.statut == D_ECART]
+        if not pts:
+            return "Non vérifiable"
+        return "Conforme au décret" if not ecarts else "Écarts : " + ", ".join(ecarts)
+
+    @property
+    def appreciation_situation(self) -> str:
+        if not self.rapprochement:
+            return "Situation d'exécution non fournie" if not self.situation else "Non rapprochée"
+        return self.rapprochement.synthese
 
     @property
     def ecart_jours(self) -> int | None:
@@ -144,25 +169,94 @@ def charger_parametres(chemin: str | Path | None = None) -> dict:
         return tomllib.load(f)
 
 
+def _liste(valeur) -> list:
+    if valeur is None:
+        return []
+    return list(valeur) if isinstance(valeur, (list, tuple)) else [valeur]
+
+
+def charger_decrets(chemins) -> list[Decret]:
+    """Lit un ou plusieurs décrets (fichiers ou dossiers). Les objets Decret déjà lus sont conservés tels quels."""
+    out = []
+    for c in _liste(chemins):
+        if isinstance(c, Decret):
+            out.append(c)
+            continue
+        c = Path(c)
+        fichiers = sorted(f for f in c.iterdir() if f.suffix.lower() in (".pdf", ".docx", ".txt")
+                          and not f.name.startswith("~$")) if c.is_dir() else [c]
+        out += [lire_decret(f) for f in fichiers]
+    return out
+
+
+def charger_situations(chemins) -> list[SourceSituation]:
+    out = []
+    for c in _liste(chemins):
+        if isinstance(c, SourceSituation):
+            out.append(c)
+            continue
+        c = Path(c)
+        fichiers = sorted(f for f in c.iterdir() if f.suffix.lower() in (".xlsx", ".xlsm", ".csv", ".pdf", ".docx")
+                          and not f.name.startswith("~$")) if c.is_dir() else [c]
+        out += [charger_source(f) for f in fichiers]
+    return out
+
+
 def analyser(chemin: str | Path, infos: InfosRapport | None = None, parametres: dict | None = None,
-             referentiel: str | Path | None = None) -> ResultatAnalyse:
+             referentiel: str | Path | None = None, decrets=None, situations=None,
+             reference_unique: bool = True) -> ResultatAnalyse:
+    """Analyse un rapport.
+
+    decrets / situations : chemin(s) de fichiers ou de dossiers, ou objets déjà chargés (charger_decrets,
+    charger_situations). Le décret et la situation de l'EPN sont choisis d'après la dénomination ou le sigle ;
+    si reference_unique est vrai et qu'un seul fichier est fourni, il est utilisé même sans correspondance.
+    """
     infos = infos or InfosRapport()
     parametres = parametres if parametres is not None else charger_parametres()
     doc = lire_rapport(chemin)
     fiches = charger_referentiel(referentiel or REFERENTIEL_DEFAUT)
     nom_epn, fiche = identifier_epn(doc, fiches)
+
+    # Décret de création et d'organisation
+    liste_decrets = charger_decrets(decrets)
+    debut = doc.texte(0, min(len(doc.blocs), 40))
+    decret = choisir_decret(liste_decrets, infos.epn or nom_epn, fiche, debut, unique=reference_unique)
+    if decret is None and fiche and fiche.fichier_decret and Path(fiche.fichier_decret).exists():
+        decret = lire_decret(fiche.fichier_decret)
+    if decret and fiche is None:
+        if nom_epn == doc.chemin.stem and decret.denomination:
+            nom_epn = decret.nom
+        fiche = decret.fiche()
     infos.epn = infos.epn or nom_epn
     infos.controleur = infos.controleur or identifier_controleur(doc) or (fiche.controleur if fiche else "")
     periode = detecter_periode(doc, infos.periode)
     structure = AnalyseStructure(doc)
     tableaux = ControleTableaux(doc)
-    transverses = ControlesTransverses(doc, structure, tableaux, periode, fiche)
+    # Avec le décret, le texte de création est vérifié par la confrontation au décret (plus complète).
+    fiche_tr = replace(fiche, texte_creation="") if (fiche and decret) else fiche
+    transverses = ControlesTransverses(doc, structure, tableaux, periode, fiche_tr)
+    confrontation = ConfrontationDecret(decret, structure, tableaux, periode) if decret else None
+
+    # Situation d'exécution à la date de la période
+    sources = charger_situations(situations)
+    situation = situation_pour(sources, infos.epn, fiche, unique=reference_unique) if sources else None
+    if situation is None and fiche and fiche.fichier_situation and Path(fiche.fichier_situation).exists():
+        situation = situation_pour([charger_source(fiche.fichier_situation)], infos.epn, fiche, unique=True)
+    rapprochement = Rapprochement(situation, tableaux, periode, doc.ocr) if situation and situation.lignes else None
+    if situation:
+        doc.avertissements.extend(situation.avertissements)
+    elif sources:
+        doc.avertissements.append("Aucune situation d'exécution ne correspond à cet EPN parmi les fichiers fournis.")
+    if liste_decrets and not decret:
+        doc.avertissements.append("Aucun des décrets fournis ne correspond à cet EPN (dénomination/sigle).")
+
     if doc.ocr:
-        for c in tableaux.constats + transverses.constats:
+        for c in tableaux.constats + transverses.constats + (confrontation.constats if confrontation else []):
             if c.nature in ("fiabilite", "coherence") and "[OCR]" not in c.message:
                 c.message += NOTE_OCR
     res = ResultatAnalyse(doc, infos, periode, date_limite(periode, parametres), structure, tableaux, transverses,
-                          parametres=parametres)
+                          parametres=parametres, decret=decret, confrontation=confrontation, situation=situation,
+                          rapprochement=rapprochement)
     annexes = structure["annexes"]
     res.signature = controle_signature(doc, annexes.debut if annexes.trouvee else None)
     res.difficultes = extraire_difficultes_suggestions(doc, structure)
@@ -310,7 +404,7 @@ def _evaluer_fond(res: ResultatAnalyse) -> None:
         if not presents:
             return None, []
         cs = constats_de(presents, nature=nature)
-        cs = [c for c in cs if c.nature == nature]
+        cs = [c for c in cs if c.nature == nature and not c.controle.startswith("Concordance")]
         return (len(cs) == 0), cs
 
     regles_tableaux = {
@@ -392,6 +486,7 @@ def _evaluer_fond(res: ResultatAnalyse) -> None:
                        "Texte de création non conforme au référentiel des EPN.") + extrait
         elif det.nb_mots < rub.mots_min:
             com = f"Rubrique présente mais très peu développée ({det.nb_mots} mots).{extrait}"
+        fiab, coh, com = _references(res, rub.code, fiab, coh, com)
         if res.doc.ocr and (fiab in (NON_FIABLE,) or coh in (INCOHERENT,)):
             com += " (Document scanné lu par OCR : confirmer les chiffres sur l'original. Détail : onglet « Contrôles automatiques ».)"
         lignes.append(LigneFond(rub.code, rub.libelle, rub.ligne_fond, fiab, coh, com))
@@ -417,6 +512,36 @@ def _evaluer_fond(res: ResultatAnalyse) -> None:
         INCOHERENT if any(l.coherence == INCOHERENT for l in tous) else A_APPRECIER,
         f"{nb_ko} rubrique(s) présentant des anomalies de fiabilité ou de cohérence ; {nb_abs} rubrique(s) non renseignée(s)."))
     res.fond = lignes
+
+
+def _references(res: ResultatAnalyse, code: str, fiab: str, coh: str, com: str) -> tuple[str, str, str]:
+    """Complète l'appréciation du fond avec le décret de création et la situation d'exécution."""
+    conf = res.confrontation
+    if conf:
+        st = conf.statut(code)
+        if st is not None:
+            if code == "texte_creation":
+                fiab = NON_FIABLE if st == D_ECART else (fiab if fiab == NON_FIABLE else FIABLE)
+                coh = INCOHERENT if st == D_ECART else COHERENT
+            else:
+                coh = INCOHERENT if st == D_ECART else (coh if coh == INCOHERENT else COHERENT)
+        if conf.commentaire(code):
+            com = f"Décret – {conf.commentaire(code)} " + com
+    rap = res.rapprochement
+    if rap:
+        ecarts = [c for c in rap.constats if c.rubrique == code and c.nature == "fiabilite"]
+        lignes = {"exec_recettes": ("T5",), "exec_depenses": ("T6",), "pres_ressources": ("T3",),
+                  "pres_emplois": ("T4",), "resultat_budgetaire": ("",)}.get(code)
+        if ecarts:
+            fiab = NON_FIABLE
+            com += " Situation d'exécution – écart(s) : " + " | ".join(_court(c, 200) for c in ecarts[:3])
+        elif lignes is not None:
+            noms = {res.tableaux.par_code[c].nom for c in lignes if c in res.tableaux.par_code} | ({"Rapport"} if "" in lignes else set())
+            ok = [l for l in rap.lignes if l.tableau in noms and l.statut == "Concordant"]
+            if ok:
+                fiab = FIABLE if fiab in (FIABLE, A_APPRECIER) else fiab
+                com += f" Montants concordants avec la situation d'exécution ({len(ok)} agrégat(s) rapproché(s))."
+    return fiab, coh, com.strip()
 
 
 def parse_infos(epn=None, controleur=None, charge=None, reception=None, periode=None) -> InfosRapport:

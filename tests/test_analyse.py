@@ -14,13 +14,32 @@ sys.path.insert(0, str(RACINE / "exemples"))
 from analyse_cb import InfosRapport, analyser, remplir_modele, tableau_de_bord  # noqa: E402
 from analyse_cb.__main__ import main  # noqa: E402
 from analyse_cb.texte import lire_nombre  # noqa: E402
-from generer_exemple import generer  # noqa: E402
+from generer_exemple import generer, generer_decret, generer_situation  # noqa: E402
 
 
 @pytest.fixture(scope="session")
 def rapports(tmp_path_factory):
     d = tmp_path_factory.mktemp("rapports")
     return {"conforme": generer(d, False), "anomalies": generer(d, True)}
+
+
+@pytest.fixture(scope="session")
+def references(tmp_path_factory):
+    d = tmp_path_factory.mktemp("references")
+    return {"decret": generer_decret(d), "situation": generer_situation(d, False),
+            "situation_ecarts": generer_situation(d, True)}
+
+
+@pytest.fixture(scope="session")
+def res_conforme_ref(rapports, references):
+    return analyser(rapports["conforme"], InfosRapport(date_reception=date(2099, 7, 28)),
+                    decrets=references["decret"], situations=references["situation"])
+
+
+@pytest.fixture(scope="session")
+def res_anomalies_ref(rapports, references):
+    return analyser(rapports["anomalies"], InfosRapport(date_reception=date(2099, 8, 12)),
+                    decrets=references["decret"], situations=references["situation_ecarts"])
 
 
 @pytest.fixture(scope="session")
@@ -191,3 +210,131 @@ def test_rapport_scanne_ocr(rapports, res_anomalies, tmp_path, monkeypatch):
     assert attendus <= trouves, attendus - trouves
     for code in ("ratios", "controle_gestion", "risques", "T8"):
         assert statut(res, code) == "Non conforme", code
+
+
+# ------------------------------------------------------------------ décret de création et d'organisation
+def test_lecture_decret(references):
+    from analyse_cb.decret import lire_decret
+    d = lire_decret(references["decret"])
+    assert d.numero == "2099-001" and d.date == date(2099, 1, 1)
+    assert d.denomination == "Agence Nationale d'Exemple" and d.sigle == "ANEX"
+    assert d.tutelle_technique == "Ministre chargé de l'Exemple"
+    assert d.tutelle_financiere == "Ministre chargé du Budget"
+    assert d.siege == "Abidjan"
+    assert len(d.missions) == 3
+    assert {"Conseil de gestion", "Agent comptable"} <= set(d.organes)
+    assert d.sessions_conseil_par_an == 2
+    assert len(d.ressources) == 3 and "Dons et legs" in d.categories_ressources
+
+
+def test_decret_rapport_conforme(res_conforme_ref):
+    r = res_conforme_ref
+    statuts = {p.theme: p.statut for p in r.confrontation.points}
+    for theme in ("Référence du texte de création", "Missions", "Mode de financement", "Organes de l'EPN",
+                  "Sessions du Conseil de gestion"):
+        assert statuts[theme] == "Conforme", theme
+    assert r.confrontation.constats == []
+    assert r.appreciation_decret == "Conforme au décret"
+    assert fond(r, "missions").coherence == "Cohérent"
+    assert fond(r, "texte_creation").fiabilite == "Fiable"
+
+
+def test_decret_rapport_anomalies(res_anomalies_ref):
+    r = res_anomalies_ref
+    statuts = {p.theme: p.statut for p in r.confrontation.points}
+    assert statuts["Missions"] == "Écart"
+    assert statuts["Sessions du Conseil de gestion"] == "Écart"  # le Conseil ne s'est pas réuni
+    assert fond(r, "missions").coherence == "Incohérent"
+    assert fond(r, "coges").coherence == "Incohérent"
+
+
+def test_decret_identifie_epn_sans_referentiel(rapports, references, tmp_path):
+    vide = tmp_path / "ref.csv"
+    vide.write_text("sigle;denomination;texte_creation;tutelle;controleur\n", encoding="utf-8")
+    r = analyser(rapports["conforme"], referentiel=vide, decrets=[references["decret"]], reference_unique=False)
+    assert r.decret is not None  # associé par le sigle/dénomination cités dans le rapport
+    assert r.infos.epn.startswith("Agence Nationale d'Exemple")
+
+
+def test_decret_texte_creation_errone(references, tmp_path):
+    from analyse_cb.decret import lire_decret
+    faux = tmp_path / "decret.txt"
+    texte = lire_decret(references["decret"]).texte.replace("2099-001", "2099-777")
+    faux.write_text(texte, encoding="utf-8")
+    d = tmp_path / "r"
+    r = analyser(generer(d, False), decrets=faux)
+    assert any(c.controle == "Texte de création conforme au décret" for c in r.constats)
+    assert fond(r, "texte_creation").fiabilite == "Non fiable"
+
+
+# ------------------------------------------------------------------ situation d'exécution
+def test_situation_concordante(res_conforme_ref):
+    r = res_conforme_ref
+    assert r.situation.filtre_epn == "ANEX" and len(r.situation.lignes) == 10  # lignes de l'OFEX écartées
+    assert r.situation.date_arrete == date(2099, 6, 30)
+    rap = r.rapprochement
+    assert rap.date_conforme is True
+    assert rap.nb_ecarts == 0 and rap.nb_concordants >= 12
+    assert rap.constats == []
+    assert r.constats == []  # aucune anomalie, même avec les références
+    for code in ("exec_recettes", "exec_depenses", "resultat_budgetaire"):
+        assert fond(r, code).fiabilite == "Fiable", code
+        assert "concordants avec la situation" in fond(r, code).commentaire
+
+
+def test_situation_ecarts(res_anomalies_ref):
+    rap = res_anomalies_ref.rapprochement
+    ecarts = {l.libelle for l in rap.lignes if l.statut == "Écart"}
+    assert {"Recouvrements", "Ordonnancements", "Ordonnancements – Investissements",
+            "Résultat budgétaire (recouvrements − ordonnancements)"} <= ecarts
+    assert {l.code for l in rap.detail if l.statut == "Écart"} == {"702900", "90047300020"}
+    assert fond(res_anomalies_ref, "exec_depenses").fiabilite == "Non fiable"
+    assert "Situation d'exécution – écart" in fond(res_anomalies_ref, "exec_depenses").commentaire
+
+
+def test_situation_csv_et_date_decalee(rapports, tmp_path):
+    csv = tmp_path / "situation.csv"
+    csv.write_text("Situation au 31/03/2099;;;;\n"
+                   "Code;Libellé;Budget actuel;Engagements;Ordonnancements\n"
+                   "90047390002;Salaires contractuels;250 000 000;240 000 000;240 000 000\n", encoding="utf-8")
+    r = analyser(rapports["conforme"], situations=csv)
+    assert r.situation.date_arrete == date(2099, 3, 31)
+    assert r.rapprochement.date_conforme is False
+    assert any(c.controle == "Date de la situation d'exécution" for c in r.constats)
+    assert any(l.code == "90047390002" and l.statut == "Concordant" for l in r.rapprochement.detail)
+
+
+def test_situation_autre_epn_non_associee(rapports, references, tmp_path):
+    import openpyxl
+    wb = openpyxl.load_workbook(references["situation"])
+    for ws in wb.worksheets:
+        for row in ws.iter_rows(min_row=4):
+            if row[0].value == "ANEX":
+                row[0].value = "AUTRE"
+    autre = tmp_path / "autre.xlsx"
+    wb.save(autre)
+    r = analyser(rapports["conforme"], situations=autre)
+    assert r.rapprochement is None
+    assert any("aucune ligne pour cet EPN" in a for a in r.doc.avertissements)
+
+
+def test_excel_references(res_anomalies_ref, tmp_path):
+    sortie = remplir_modele(res_anomalies_ref, tmp_path / "analyse.xlsx")
+    wb = openpyxl.load_workbook(sortie)
+    assert {"Décret de création", "Situation d'exécution"} <= set(wb.sheetnames)
+    assert wb.worksheets[0]["D86"].value == "Incohérent"  # missions
+    assert wb.worksheets[0]["C98"].value == "Non fiable"  # exécution en dépenses
+    assert "Situation d'exécution" in wb.worksheets[0]["A127"].value
+    valeurs = [c.value for row in wb["Situation d'exécution"].iter_rows() for c in row]
+    assert "Écart" in valeurs and "Concordant" in valeurs
+    tdb = openpyxl.load_workbook(tableau_de_bord([(res_anomalies_ref, sortie)], tmp_path / "tdb.xlsx")).active
+    entetes = [c.value for c in tdb[1]]
+    assert tdb.cell(2, entetes.index("Conformité au décret de création") + 1).value.startswith("Écarts")
+
+
+def test_cli_references(rapports, references, tmp_path):
+    code = main([str(rapports["anomalies"]), "--decret", str(references["decret"]),
+                 "--situation", str(references["situation_ecarts"]), "-o", str(tmp_path / "out")])
+    assert code == 0
+    wb = openpyxl.load_workbook(tmp_path / "out" / "Analyse_rapport_exemple_anomalies.xlsx")
+    assert "Situation d'exécution" in wb.sheetnames

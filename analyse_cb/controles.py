@@ -129,6 +129,8 @@ class FicheEPN:
     texte_creation: str = ""
     tutelle: str = ""
     controleur: str = ""
+    fichier_decret: str = ""  # chemin du décret de création (facultatif)
+    fichier_situation: str = ""  # chemin de la situation d'exécution (facultatif)
 
 
 def lire_csv(chemin: str | Path) -> list[dict[str, str]]:
@@ -150,8 +152,13 @@ def lire_csv(chemin: str | Path) -> list[dict[str, str]]:
 
 
 def charger_referentiel(chemin: str | Path) -> list[FicheEPN]:
+    base = Path(chemin).parent
+
+    def absolu(v: str) -> str:
+        return str(base / v) if v and not Path(v).is_absolute() else v
     return [FicheEPN(r.get("sigle", ""), r.get("denomination", ""), r.get("texte_creation", ""),
-                     r.get("tutelle", ""), r.get("controleur", "")) for r in lire_csv(chemin)
+                     r.get("tutelle", ""), r.get("controleur", ""), absolu(r.get("fichier_decret", "")),
+                     absolu(r.get("fichier_situation", ""))) for r in lire_csv(chemin)
             if r.get("sigle") or r.get("denomination")]
 
 

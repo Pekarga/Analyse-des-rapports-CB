@@ -3,6 +3,8 @@
 Exemples :
     python -m analyse_cb rapport.docx --reception 05/08/2025 --charge "M. X"
     python -m analyse_cb dossier_rapports/ --registre registre.csv --sortie resultats/
+    python -m analyse_cb rapport.pdf --decret decret_creation.pdf --situation situation_30062025.xlsx
+    python -m analyse_cb rapports/ --decret decrets/ --situation situation_consolidee_30062025.xlsx
 """
 from __future__ import annotations
 
@@ -10,7 +12,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from .analyse import charger_parametres, parse_infos, analyser
+from .analyse import analyser, charger_decrets, charger_parametres, charger_situations, parse_infos
 from .controles import lire_csv
 from .excel import remplir_modele, tableau_de_bord
 from .texte import normaliser
@@ -19,10 +21,19 @@ EXTENSIONS = {".docx", ".pdf"}
 
 
 def _registre(chemin: str | None) -> dict[str, dict]:
-    """Registre de réception : fichier;epn;controleur;periode;date_reception;charge_etudes"""
+    """Registre de réception : fichier;epn;controleur;periode;date_reception;charge_etudes[;decret;situation]"""
     if not chemin:
         return {}
-    return {normaliser(Path(r.get("fichier", "")).name): r for r in lire_csv(chemin) if r.get("fichier")}
+    base = Path(chemin).parent
+    registre = {}
+    for r in lire_csv(chemin):
+        if not r.get("fichier"):
+            continue
+        for cle in ("decret", "situation"):  # chemins relatifs au registre
+            if r.get(cle) and not Path(r[cle]).is_absolute():
+                r[cle] = str(base / r[cle])
+        registre[normaliser(Path(r["fichier"]).name)] = r
+    return registre
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -39,6 +50,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--parametres", help="Fichier de paramètres TOML (défaut : config/parametres.toml)")
     p.add_argument("--referentiel", help="Référentiel des EPN (défaut : config/referentiel_epn.csv)")
     p.add_argument("--modele", help="Modèle Excel d'analyse (défaut : modeles/Fichier_analyse_des_rapports_des_CB.xlsx)")
+    p.add_argument("--decret", action="append", default=[],
+                   help="Décret de création et d'organisation (.pdf/.docx/.txt) ou dossier de décrets ; répétable. "
+                        "Chaque rapport est associé au décret de son EPN (dénomination ou sigle).")
+    p.add_argument("--situation", action="append", default=[],
+                   help="Situation d'exécution à la date de la période (.xlsx/.csv/.pdf/.docx) ou dossier ; répétable. "
+                        "Un fichier consolidé avec une colonne « EPN » est filtré automatiquement.")
     a = p.parse_args(argv)
 
     fichiers: list[Path] = []
@@ -63,6 +80,14 @@ def main(argv: list[str] | None = None) -> int:
     lecture.RAPPEL_PROGRESSION = progression
     parametres = charger_parametres(a.parametres)
     registre = _registre(a.registre)
+    try:
+        decrets = charger_decrets(a.decret)
+        situations = charger_situations(a.situation)
+    except Exception as exc:
+        print(f"Référence illisible : {exc}", file=sys.stderr)
+        return 1
+    for d in decrets:
+        print(f"Décret lu : {d.chemin.name} → {d.nom or '(EPN non identifié)'} – {d.reference or 'référence non lue'}")
     sortie = Path(a.sortie)
     resultats, erreurs = [], 0
     for f in fichiers:
@@ -74,7 +99,10 @@ def main(argv: list[str] | None = None) -> int:
                             reception=r.get("date_reception") or (a.reception if unique else None),
                             periode=r.get("periode") or (a.periode if unique else None))
         try:
-            res = analyser(f, infos, parametres, a.referentiel)
+            res = analyser(f, infos, parametres, a.referentiel,
+                           decrets=charger_decrets(r["decret"]) if r.get("decret") else decrets,
+                           situations=charger_situations(r["situation"]) if r.get("situation") else situations,
+                           reference_unique=unique or bool(r.get("decret") or r.get("situation")))
             fichier_sortie = remplir_modele(res, sortie / f"Analyse_{f.stem}.xlsx", a.modele)
         except Exception as exc:  # un rapport illisible ne doit pas bloquer le lot
             erreurs += 1
@@ -85,6 +113,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"   EPN : {res.infos.epn} | {res.periode.libelle} | {res.appreciation_delai}")
         print(f"   Forme : {res.score_forme:.0f} % ({res.mention(res.score_forme)}) | "
               f"constats : {len(res.constats)} dont {res.nb_anomalies_majeures} majeur(s)")
+        if res.confrontation or decrets:
+            print(f"   Décret : {res.appreciation_decret}")
+        if res.situation or situations:
+            print(f"   Situation d'exécution : {res.appreciation_situation}")
         for avert in res.doc.avertissements:
             print(f"   ⚠ {avert}")
     if len(resultats) > 1 or a.registre:

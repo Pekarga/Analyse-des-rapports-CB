@@ -162,6 +162,8 @@ def remplir_modele(res: ResultatAnalyse, sortie: str | Path, modele: str | Path 
     if majeures:
         from .analyse import _court
         synthese_fond += "\nPrincipaux constats : " + " | ".join(_court(c, 160) for c in majeures[:5])
+    synthese_fond += f"\nDécret de création et d'organisation : {res.appreciation_decret}."
+    synthese_fond += f"\nSituation d'exécution : {res.appreciation_situation}"
     synthese_fond += "\nLes rubriques « À apprécier » nécessitent une lecture qualitative du Chargé d'Études."
     _ecrire_long(ws, 127, synthese_fond, hauteur=_hauteur(synthese_fond, 95, 45))
 
@@ -249,6 +251,22 @@ def projet_appreciation(res: ResultatAnalyse) -> str:
         recos.append("Approfondir l'analyse des rubriques insuffisamment développées.")
     if not res.difficultes.get("suggestions"):
         recos.append("Formuler des suggestions opérationnelles en réponse aux difficultés relevées.")
+    if res.confrontation:
+        from .decret import ECART
+        ecarts = [p for p in res.confrontation.points if p.statut == ECART]
+        if ecarts:
+            faibles.append("écarts avec le décret de création et d'organisation (" + ", ".join(p.theme.lower() for p in ecarts) + ")")
+            recos.append("Rappeler fidèlement le cadre institutionnel de l'EPN (texte de création, missions, organes, "
+                         "ressources) tel que fixé par le décret de création.")
+        else:
+            forts.append("présentation de l'EPN conforme au décret de création")
+    if res.rapprochement:
+        if any(c.controle.startswith("Concordance") for c in res.rapprochement.constats):
+            faibles.append("montants du rapport non concordants avec la situation d'exécution de référence")
+            recos.append("Rapprocher les données du rapport de la situation d'exécution arrêtée à la fin de la période "
+                         "(système d'information budgétaire) et justifier les écarts.")
+        elif res.rapprochement.nb_concordants:
+            forts.append("données d'exécution concordantes avec la situation d'exécution de référence")
     texte = (f"{MENTION_AUTO}\n"
              f"Appréciation globale : forme {res.mention(res.score_forme).lower()} ({res.score_forme:.0f} %), fond "
              + (f"{res.mention(res.score_fond).lower()} ({res.score_fond:.0f} % des points vérifiables)." if res.score_fond is not None
@@ -311,6 +329,10 @@ def ajouter_onglets_detail(wb: Workbook, res: ResultatAnalyse) -> None:
         ("Tableaux du canevas identifiés", ", ".join(sorted(res.tableaux.par_code)) or "aucun"),
         ("Constats automatiques", f"{len(res.constats)} dont {res.nb_anomalies_majeures} majeur(s)"),
         ("Signature / date", res.signature[1]),
+        ("Décret de création et d'organisation",
+         (f"{res.decret.reference} ({res.decret.chemin.name}) – " if res.decret else "") + res.appreciation_decret),
+        ("Situation d'exécution",
+         (f"{res.situation.chemin.name} – " if res.situation else "") + res.appreciation_situation),
         ("Suite à donner (proposition)", suite_a_donner(res)),
     ]
     for i, (k, v) in enumerate(infos, start=3):
@@ -387,6 +409,11 @@ def ajouter_onglets_detail(wb: Workbook, res: ResultatAnalyse) -> None:
             _ligne(ws, i, [nom, libelles[e.categorie], e.texte, e.page or "", ""])
             i += 1
 
+    if res.decret:
+        _onglet_decret(wb, res)
+    if res.situation:
+        _onglet_situation(wb, res)
+
     # Tableaux extraits (pour vérification visuelle)
     ws = wb.create_sheet("Tableaux extraits")
     i = 1
@@ -402,6 +429,120 @@ def ajouter_onglets_detail(wb: Workbook, res: ResultatAnalyse) -> None:
         ws.column_dimensions[get_column_letter(j)].width = 22 if j > 1 else 50
 
 
+_COULEURS_REF = {"Conforme": VERT, "Concordant": VERT, "Écart": ROUGE, "À vérifier": ORANGE, "Information": GRIS,
+                 "Non comparable": GRIS}
+
+
+def _bloc_infos(ws, ligne: int, infos: list[tuple[str, str]]) -> int:
+    for k, v in infos:
+        ws.cell(ligne, 1, k).font = Font(bold=True)
+        c = ws.cell(ligne, 2, v)
+        c.alignment = ENVELOPPE
+        ws.merge_cells(start_row=ligne, start_column=2, end_row=ligne, end_column=5)
+        ws.row_dimensions[ligne].height = _hauteur(v, 110, 15)
+        ligne += 1
+    return ligne + 1
+
+
+def _onglet_decret(wb: Workbook, res: ResultatAnalyse) -> None:
+    d, conf = res.decret, res.confrontation
+    ws = wb.create_sheet("Décret de création")
+    ws["A1"] = "Confrontation du rapport au décret de création et d'organisation de l'EPN"
+    ws["A1"].font = Font(bold=True, size=14, color="1F4E78")
+    ws["A2"] = MENTION_AUTO + (" – décret scanné, lu par OCR : à confirmer sur l'original." if d.ocr else "")
+    ws["A2"].font = POLICE_AUTO
+    i = _bloc_infos(ws, 4, [
+        ("Fichier", d.chemin.name), ("Texte de création", d.reference or "(non lu)"),
+        ("Dénomination", d.denomination or "(non lue)"), ("Sigle", d.sigle or "—"), ("Catégorie", d.categorie or "—"),
+        ("Tutelle technique", d.tutelle_technique or "—"), ("Tutelle économique et financière", d.tutelle_financiere or "—"),
+        ("Siège", d.siege or "—"), ("Antennes / implantations", d.antennes or "—"),
+        ("Missions", "\n".join(f"• {m}" for m in d.missions) or "(non lues)"),
+        ("Organes", " ; ".join(d.organes) or "—"),
+        ("Sessions du Conseil de gestion", (f"{d.sessions_conseil_par_an} par an au minimum – {d.phrase_sessions}"
+                                            if d.sessions_conseil_par_an else "Périodicité non lue")),
+        ("Ressources", "\n".join(f"• {r}" for r in d.ressources) or "(non lues)"),
+    ])
+    ws.cell(i, 1, "Points de contrôle").font = Font(bold=True, size=12, color="1F4E78")
+    _entetes(ws, i + 1, ["Thème", "Rubrique du canevas", "Disposition du décret", "Constat dans le rapport", "Statut",
+                         "Appréciation du CE"], [34, 30, 60, 70, 14, 25])
+    from .canevas import PAR_CODE
+    for k, p in enumerate(conf.points if conf else [], start=i + 2):
+        _ligne(ws, k, [p.theme, PAR_CODE[p.rubrique].libelle if p.rubrique in PAR_CODE else p.rubrique,
+                       p.disposition, p.constat, p.statut, ""])
+        ws.cell(k, 5).fill = PatternFill("solid", fgColor=_COULEURS_REF.get(p.statut, "FFFFFF"))
+
+
+def _onglet_situation(wb: Workbook, res: ResultatAnalyse) -> None:
+    sit, rap = res.situation, res.rapprochement
+    ws = wb.create_sheet("Situation d'exécution")
+    ws["A1"] = "Rapprochement du rapport avec la situation d'exécution du budget"
+    ws["A1"].font = Font(bold=True, size=14, color="1F4E78")
+    ws["A2"] = MENTION_AUTO
+    ws["A2"].font = POLICE_AUTO
+    date_ok = ("—" if not rap or rap.date_conforme is None else
+               "conforme à la fin de la période" if rap.date_conforme else
+               f"différente de la fin de la période ({res.periode.fin:%d/%m/%Y})")
+    i = _bloc_infos(ws, 4, [
+        ("Fichier", sit.chemin.name + (f" (lignes de l'EPN « {sit.filtre_epn} »)" if sit.filtre_epn else "")),
+        ("Date d'arrêté", (f"{sit.date_arrete:%d/%m/%Y} – {date_ok}" if sit.date_arrete else "non trouvée – à vérifier")),
+        ("Lignes lues", f"{len(sit.lignes_de('recettes'))} ligne(s) de recettes, {len(sit.lignes_de('depenses'))} ligne(s) de dépenses"),
+        ("Synthèse", res.appreciation_situation),
+    ] + [("Avertissement", a) for a in sit.avertissements])
+    if not rap:
+        return
+    ws.cell(i, 1, "Rapprochement des agrégats").font = Font(bold=True, size=12, color="1F4E78")
+    _entetes(ws, i + 1, ["Agrégat", "Tableau du rapport", "Montant du rapport", "Montant de la situation", "Écart (rapport − situation)",
+                         "Statut"], [55, 45, 20, 22, 22, 15])
+    k = i + 2
+    for l in rap.lignes:
+        _ligne(ws, k, [l.libelle, l.tableau, l.rapport, l.situation, l.ecart, l.statut])
+        for col in (3, 4, 5):
+            ws.cell(k, col).number_format = "# ##0"
+            if l.taux and ws.cell(k, col).value is not None:
+                ws.cell(k, col).value = ws.cell(k, col).value / 100
+                ws.cell(k, col).number_format = "0.00%"
+        ws.cell(k, 6).fill = PatternFill("solid", fgColor=_COULEURS_REF.get(l.statut, "FFFFFF"))
+        k += 1
+    k += 1
+    ws.cell(k, 1, "Rapprochement ligne à ligne (par code)").font = Font(bold=True, size=12, color="1F4E78")
+    _entetes(ws, k + 1, ["Ligne (code – libellé – montant)", "Tableau du rapport", "Montant du rapport", "Montant de la situation",
+                         "Écart (rapport − situation)", "Statut"], [55, 45, 20, 22, 22, 15])
+    k += 2
+    detail = sorted(rap.detail, key=lambda l: l.statut != "Écart")
+    for l in detail:
+        _ligne(ws, k, [l.libelle, l.tableau, l.rapport, l.situation, l.ecart, l.statut])
+        for col in (3, 4, 5):
+            ws.cell(k, col).number_format = "# ##0"
+        ws.cell(k, 6).fill = PatternFill("solid", fgColor=_COULEURS_REF.get(l.statut, "FFFFFF"))
+        k += 1
+    if not detail:
+        ws.cell(k, 1, "Aucun code commun entre les tableaux 5/6 du rapport et la situation (rapprochement global uniquement).")
+        k += 1
+    for titre, liste in (("Lignes de la situation absentes du rapport", rap.codes_absents_rapport),
+                         ("Lignes du rapport absentes de la situation", rap.codes_absents_situation)):
+        if liste:
+            k += 1
+            ws.cell(k, 1, titre).font = Font(bold=True, color="C00000")
+            for x in liste:
+                k += 1
+                ws.cell(k, 1, x)
+    # Données de la situation retenues (pour contrôle)
+    k += 2
+    ws.cell(k, 1, "Données de la situation d'exécution retenues pour l'EPN").font = Font(bold=True, size=12, color="1F4E78")
+    from .situation import LIBELLES_GROUPES
+    _entetes(ws, k + 1, ["Libellé", "Sens / groupe", "Code", "Initial", "Actuel / final", "Engagements",
+                         "Ordonnancements", "Recouvrements"], [55, 45, 20, 22, 22, 15, 18, 18])
+    k += 2
+    for l in sit.lignes:
+        v = l.valeurs
+        _ligne(ws, k, [l.libelle, f"{'Recettes' if l.sens == 'recettes' else 'Dépenses'} – {LIBELLES_GROUPES.get(l.groupe, l.groupe)}",
+                       l.code, v.get("initial"), v.get("actuel"), v.get("engage"), v.get("ordonnance", v.get("liquide")),
+                       v.get("recouvre")])
+        for col in range(4, 9):
+            ws.cell(k, col).number_format = "# ##0"
+        k += 1
+
+
 # ------------------------------------------------------------------ tableau de bord multi-rapports
 def tableau_de_bord(resultats: list[tuple[ResultatAnalyse, Path]], sortie: str | Path) -> Path:
     wb = Workbook()
@@ -410,8 +551,9 @@ def tableau_de_bord(resultats: list[tuple[ResultatAnalyse, Path]], sortie: str |
     titres = ["EPN", "Contrôleur Budgétaire", "Période", "Date limite", "Date de réception", "Écart (jours)",
               "Délai", "Canevas en vigueur", "Conformité forme (%)", "Appréciation forme", "Fiabilité/cohérence (%)",
               "Rubriques absentes", "Tableaux manquants", "Anomalies majeures", "Anomalies mineures",
-              "Signé et daté", "Suite à donner (proposition)", "Fichier d'analyse"]
-    _entetes(ws, 1, titres, [35, 25, 28, 12, 12, 10, 22, 18, 12, 18, 12, 50, 22, 10, 10, 14, 60, 40])
+              "Signé et daté", "Conformité au décret de création", "Concordance avec la situation d'exécution",
+              "Suite à donner (proposition)", "Fichier d'analyse"]
+    _entetes(ws, 1, titres, [35, 25, 28, 12, 12, 10, 22, 18, 12, 18, 12, 50, 22, 10, 10, 14, 40, 60, 60, 40])
     for i, (r, fichier) in enumerate(resultats, start=2):
         tabs_manquants = [l.libelle.split(" :")[0] for l in r.forme
                           if l.code.startswith("T") and l.code[1:].isdigit() and l.statut == NON_CONFORME]
@@ -420,9 +562,13 @@ def tableau_de_bord(resultats: list[tuple[ResultatAnalyse, Path]], sortie: str |
                        r.mention(r.score_forme), r.score_fond, "; ".join(r.rubriques_absentes),
                        ", ".join(tabs_manquants), r.nb_anomalies_majeures,
                        sum(1 for c in r.constats if c.gravite == "Mineure"), r.signature[0],
-                       suite_a_donner(r), fichier.name])
+                       r.appreciation_decret, r.appreciation_situation, suite_a_donner(r), fichier.name])
         ws.cell(i, 4).number_format = ws.cell(i, 5).number_format = "DD/MM/YYYY"
-        ws.cell(i, 18).hyperlink = fichier.name
+        ws.cell(i, 20).hyperlink = fichier.name
+        if r.confrontation:
+            ws.cell(i, 17).fill = PatternFill("solid", fgColor=VERT if r.appreciation_decret.startswith("Conforme") else ORANGE)
+        if r.rapprochement:
+            ws.cell(i, 18).fill = PatternFill("solid", fgColor=ROUGE if r.rapprochement.nb_ecarts else VERT)
         ws.cell(i, 9).fill = PatternFill("solid", fgColor=VERT if r.score_forme >= 75 else ORANGE if r.score_forme >= 50 else ROUGE)
         if r.ecart_jours is not None and r.ecart_jours > 0:
             ws.cell(i, 7).fill = PatternFill("solid", fgColor=ROUGE)
