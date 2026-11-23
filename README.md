@@ -43,7 +43,7 @@ L'outil est disponible sous forme d'**application Windows** : un installateur `A
 
 Les résultats s'affichent dans la fenêtre (forme, fond, anomalies majeures, suite à donner) ; un double-clic ouvre le fichier d'analyse Excel. Avec plusieurs rapports, un tableau de bord consolidé est aussi produit. Le menu **Paramètres** ouvre les fichiers modifiables (délais, seuils, référentiel des EPN), copiés au premier lancement dans `%APPDATA%\AnalyseRapportsCB`.
 
-Construction manuelle (poste Windows avec Python 3.12) : `pip install -r requirements.txt pyinstaller`, puis `pyinstaller packaging/AnalyseRapportsCB.spec` et `iscc packaging\installateur.iss` (Inno Setup 6). Placez au préalable le dossier de Tesseract (avec `tessdata\fra.traineddata`) dans `tesseract\` à la racine du dépôt pour l'intégrer à l'application.
+Construction manuelle (poste Windows avec Python 3.12) : `pip install -r requirements-dev.txt`, puis `pyinstaller packaging/AnalyseRapportsCB.spec` et `iscc packaging\installateur.iss` (Inno Setup 6). Placez au préalable le dossier de Tesseract (avec `tessdata\fra.traineddata`) dans `tesseract\` à la racine du dépôt pour l'intégrer à l'application.
 
 ## Installation (une seule fois)
 

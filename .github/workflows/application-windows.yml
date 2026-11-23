@@ -12,7 +12,7 @@ on:
       - "config/**"
       - "modeles/**"
       - "packaging/**"
-      - "requirements.txt"
+      - "requirements*.txt"
       - ".github/workflows/application-windows.yml"
 
 permissions:
@@ -32,7 +32,7 @@ jobs:
       - name: Dépendances Python
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pyinstaller==6.11.1 pytest
+          pip install -r requirements-dev.txt
 
       - name: Tesseract OCR (langue française) intégré à l'application
         shell: pwsh

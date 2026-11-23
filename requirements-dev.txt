@@ -1,0 +1,5 @@
+# Outils de test et de construction de l'application (en plus de requirements.txt)
+-r requirements.txt
+pytest>=8
+reportlab>=4        # génération du décret d'exemple (tests)
+pyinstaller==6.11.1 # construction de l'exécutable Windows
