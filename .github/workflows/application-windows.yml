@@ -63,6 +63,14 @@ jobs:
           if (-not (Test-Path "verification\Analyse_rapport_exemple_conforme.xlsx")) { throw "Le fichier d'analyse n'a pas été produit (code $($p.ExitCode))." }
           Write-Host "Exécutable vérifié."
 
+      - name: Vérification de l'OCR intégré (décret d'exemple « scanné »)
+        shell: pwsh
+        run: |
+          python -c "import pypdfium2 as p; d=p.PdfDocument('exemples/decret_creation_ANEX.pdf'); im=[d[i].render(scale=200/72, grayscale=True).to_pil().convert('L') for i in range(len(d))]; im[0].save('decret_scanne.pdf','PDF',resolution=200,save_all=True,append_images=im[1:])"
+          $p = Start-Process -FilePath "dist\AnalyseRapportsCB\AnalyseRapportsCB.exe" -ArgumentList @("--ligne-de-commande", "exemples\rapport_exemple_conforme.docx", "--decret", "decret_scanne.pdf", "-o", "verification_ocr") -Wait -PassThru
+          python -c "import openpyxl,sys; wb=openpyxl.load_workbook('verification_ocr/Analyse_rapport_exemple_conforme.xlsx'); v=' '.join(str(c.value) for r in wb['Décret de création'].iter_rows() for c in r if c.value); sys.exit(0 if '2099-001' in v else 'OCR du décret scanné non concluant')"
+          Write-Host "OCR intégré vérifié (décret scanné lu par l'exécutable)."
+
       - name: Installateur (Inno Setup)
         shell: pwsh
         run: |
