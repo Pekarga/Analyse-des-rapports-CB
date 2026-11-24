@@ -6,6 +6,7 @@ aléatoire de la session (en-tête X-Jeton ou paramètre « jeton »).
 from __future__ import annotations
 
 import json
+import logging
 import mimetypes
 import os
 import re
@@ -29,6 +30,7 @@ from .ressources import dossier_ressources, dossier_utilisateur
 EXT_ACCEPTEES = {"rapport": (".docx", ".pdf"), "decret": (".pdf", ".docx", ".txt"),
                  "situation": (".xlsx", ".xlsm", ".csv", ".pdf", ".docx"), "logo": (".png", ".jpg", ".jpeg", ".gif", ".svg")}
 INSTITUTION_DEFAUT = {"ligne1": "Ministère des Finances et du Budget", "ligne2": "Côte d'Ivoire"}
+JOURNAL = logging.getLogger("analyse_cb.serveur")
 
 
 def dossier_web() -> Path:
@@ -92,6 +94,7 @@ class Application:
         self.verrou = threading.Lock()
         self.arret = threading.Event()
         self.quitter = threading.Event()
+        self.interface_chargee = threading.Event()  # l'interface a interrogé le serveur (affichage effectif)
 
     # -- fichiers déposés depuis l'interface
     def deposer(self, nom: str, categorie: str, contenu: bytes) -> dict:
@@ -152,7 +155,8 @@ class Application:
             "execution": {"seuil_vigilance": 10, "seuil_sous_execution": 20, **eff.get("execution", {})},
             "analyse": {"validation_directe": True, **eff.get("analyse", {})},
             "fichiers": {"parametres": str(PARAMETRES_DEFAUT), "referentiel": str(REFERENTIEL_DEFAUT),
-                         "historique": str(historique.chemin_base())},
+                         "historique": str(historique.chemin_base()),
+                         "journal": str(dossier_utilisateur() / "journal.txt")},
         }
 
     def enregistrer_parametres(self, data: dict) -> dict:
@@ -257,6 +261,7 @@ class Application:
                 t["rapports"][k].update(etat="erreur", erreur="Le fichier d'analyse est ouvert dans Excel : fermez-le puis relancez.")
             except Exception as exc:
                 traceback.print_exc()
+                JOURNAL.exception("Analyse de %s", fichier["nom"])
                 t["rapports"][k].update(etat="erreur", erreur=str(exc))
         lecture.RAPPEL_PROGRESSION = None
         if len(resultats) > 1:
@@ -288,6 +293,11 @@ class Application:
         elif quoi in ("parametres", "referentiel", "dossier_parametres"):
             ouvrir_systeme({"parametres": PARAMETRES_DEFAUT, "referentiel": REFERENTIEL_DEFAUT,
                             "dossier_parametres": PARAMETRES_DEFAUT.parent}[quoi])
+        elif quoi == "journal":
+            journal = dossier_utilisateur() / "journal.txt"
+            if not journal.exists():
+                raise ValueError("Le journal de l'application est vide.")
+            ouvrir_systeme(journal)
         else:
             raise ValueError("Demande d'ouverture invalide.")
 
@@ -362,6 +372,9 @@ class Gestionnaire(BaseHTTPRequestHandler):
         q = {k: v[0] for k, v in parse_qs(req.query).items()}
         try:
             if chemin == "/api/etat":
+                if not self.app.interface_chargee.is_set():
+                    self.app.interface_chargee.set()
+                    JOURNAL.info("Interface chargée (%s).", (self.headers.get("User-Agent") or "")[:160])
                 return self._json(self.app.etat())
             if chemin == "/api/tableau":
                 return self._json(tableau.tableau_de_bord(q.get("periode"), parametres_effectifs()))
@@ -430,6 +443,9 @@ class Gestionnaire(BaseHTTPRequestHandler):
                 if data.get("ouvrir", True):
                     ouvrir_systeme(Path(chemin))
                 return self._json({"chemin": chemin})
+            if req.path == "/api/journal":  # erreurs relevées par l'interface
+                JOURNAL.error("Interface : %s", str(data.get("message", ""))[:2000])
+                return self._json({"ok": True})
             if req.path == "/api/quitter":
                 self.app.quitter.set()
                 return self._json({"ok": True})

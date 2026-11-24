@@ -36,8 +36,13 @@ Name: "bureau"; Description: "Créer un raccourci sur le Bureau"; GroupDescripti
 [Files]
 Source: "..\dist\AnalyseRapportsCB\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+[InstallDelete]
+; Version précédente : bibliothèques remplacées en totalité (installation propre)
+Type: filesandordirs; Name: "{app}\_internal"
+
 [Icons]
 Name: "{group}\{#NomApp}"; Filename: "{app}\AnalyseRapportsCB.exe"
+Name: "{group}\{#NomApp} (dans le navigateur)"; Filename: "{app}\AnalyseRapportsCB.exe"; Parameters: "--navigateur"
 Name: "{group}\Désinstaller {#NomApp}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#NomApp}"; Filename: "{app}\AnalyseRapportsCB.exe"; Tasks: bureau
 

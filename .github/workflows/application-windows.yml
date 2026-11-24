@@ -93,6 +93,21 @@ jobs:
         shell: pwsh
         run: Write-Host "La fenêtre de l'application affiche l'interface."
 
+      - name: Vérification de la bascule automatique vers le navigateur
+        id: repli
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist\AnalyseRapportsCB\AnalyseRapportsCB.exe" -ArgumentList @("--test-repli", "test_repli.txt") -Wait -PassThru
+          Get-Content test_repli.txt -ErrorAction SilentlyContinue
+          if ($p.ExitCode -ne 0) { throw "Bascule non vérifiée (code $($p.ExitCode))." }
+
+      - name: Bascule vers le navigateur vérifiée
+        if: steps.repli.outcome == 'success'
+        shell: pwsh
+        run: Write-Host "La fenêtre vide est refermée et l'application bascule sur le navigateur."
+
       - name: Vérification de l'OCR intégré (décret d'exemple « scanné »)
         shell: pwsh
         run: |

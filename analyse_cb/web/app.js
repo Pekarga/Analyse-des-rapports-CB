@@ -2,6 +2,12 @@
 "use strict";
 
 const JETON = new URLSearchParams(location.search).get("jeton") || "";
+/* Les erreurs de l'interface sont consignées dans le journal de l'application. */
+function signaler(message) {
+  try { fetch("/api/journal", { method: "POST", headers: { "X-Jeton": JETON, "Content-Type": "application/json" }, body: JSON.stringify({ message: String(message).slice(0, 2000) }) }); } catch (_) { /* sans effet */ }
+}
+window.addEventListener("error", e => signaler(`${e.message} (${(e.filename || "").split("/").pop()}:${e.lineno}:${e.colno})`));
+window.addEventListener("unhandledrejection", e => signaler((e.reason && (e.reason.stack || e.reason.message)) || e.reason));
 const etat = { app: null, periode: null, analyse: { rapports: [], decrets: [], situations: [] }, suivi: null };
 
 /* ------------------------------------------------------------------ icônes (24 × 24, trait) */
@@ -746,7 +752,7 @@ async function pageParametres() {
       <div class="panneau section-param"><h2>${icone("comparaison")}Exécution budgétaire</h2><div class="ligne-champs">
         ${c("execution", "seuil_vigilance", "« À surveiller » au-delà de (points)", "Écart au taux attendu (25 %, 50 %, 75 %, 100 %)", "number")}${c("execution", "seuil_sous_execution", "« Sous-exécution » au-delà de (points)", "", "number")}</div></div>
       <div class="panneau section-param"><h2>${icone("fichier")}Fichiers</h2>
-        <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="bouton" data-ouvrir="referentiel">Référentiel des EPN</button><button class="bouton" data-ouvrir="parametres">Fichier des paramètres</button><button class="bouton" data-ouvrir="dossier_parametres">Dossier des paramètres</button></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="bouton" data-ouvrir="referentiel">Référentiel des EPN</button><button class="bouton" data-ouvrir="parametres">Fichier des paramètres</button><button class="bouton" data-ouvrir="dossier_parametres">Dossier des paramètres</button><button class="bouton" data-ouvrir="journal">Journal de l'application</button></div>
         <p class="aide" style="margin:10px 0 0">Lecture des documents scannés : ${etat.app && etat.app.ocr.ok ? "disponible" : "indisponible – " + esc(etat.app ? etat.app.ocr.message : "")}.<br>Historique des analyses : ${esc(p.fichiers.historique)}</p></div>
     </div></div>`;
   const majLogo = () => { document.getElementById("apercu-logo").innerHTML = etat.app && etat.app.logo ? `<img src="/api/logo?jeton=${encodeURIComponent(JETON)}&t=${Date.now()}" alt="">` : icone("analyse", 'style="width:40px;height:40px;color:#fff"'); };
@@ -777,7 +783,8 @@ function pageAide() {
       <p><b>D'où viennent les montants du tableau de bord ?</b><br>De la situation d'exécution (SIGOBE) lorsqu'elle est fournie, sinon des tableaux du rapport. La source est indiquée sous le détail par EPN.</p>
       <p><b>Comment est fixé le statut d'exécution ?</b><br>Le taux d'exécution est comparé au taux attendu en fin de période (25 %, 50 %, 75 %, 100 %). Les seuils se règlent dans les Paramètres.</p>
       <p><b>Un document scanné n'est pas lu.</b><br>Vérifiez dans Paramètres que la lecture des documents scannés est disponible. À défaut, demandez la version Word du rapport.</p>
-      <p><b>Où sont conservées les données ?</b><br>Uniquement sur ce poste : les fichiers d'analyse dans le dossier des résultats, l'historique dans le profil de l'utilisateur. Aucune donnée n'est envoyée sur Internet.</p></div></div>`;
+      <p><b>Où sont conservées les données ?</b><br>Uniquement sur ce poste : les fichiers d'analyse dans le dossier des résultats, l'historique dans le profil de l'utilisateur. Aucune donnée n'est envoyée sur Internet.</p>
+      <p><b>La fenêtre de l'application reste vide.</b><br>L'application bascule d'elle-même sur le navigateur au bout de quelques secondes. Vous pouvez aussi utiliser le raccourci « Analyse des rapports des CB (dans le navigateur) » du menu Démarrer. Le déroulement est consigné dans le journal (Paramètres, Fichiers).</p></div></div>`;
 }
 function pageAPropos() {
   const v = etat.app ? etat.app.version : "";
