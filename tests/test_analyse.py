@@ -548,7 +548,7 @@ def test_historique_et_tableau_de_bord(res_conforme_ref, res_anomalies_ref, tmp_
     ligne = d["lignes"][0]
     assert ligne["statut"] in ("OK", "À surveiller", "Sous-exécution", "Dépassement") and ligne["tutelle"]
     assert d["ministeres"][0]["credits"] == m["credits"] and "repartition" not in d
-    assert [g for g in d["graphiques"]] == ["epn", "nature"]  # plus de vue « par ministère » dans le graphique
+    assert "ministere" not in d["graphiques"] and {"epn", "nature"} <= set(d["graphiques"])  # plus de vue « par ministère »
     # Ratios de gestion de la période (même source que les montants : la situation d'exécution)
     rr = {x["code"]: x for x in d["ratios"]["agreges"]}
     assert set(rr) == {"RRP", "RDP", "RDF", "RDI", "RDA"} and d["ratios"]["disponibles"] == 1
@@ -679,6 +679,63 @@ def test_icone_application():
     assert (RACINE / "packaging" / "banniere.jpg").exists()
 
 
+def test_tableau_de_bord_et_comparaison_par_epn(rapports, references, tmp_path, monkeypatch):
+    """Analyses d'un même EPN sur trois trimestres : liste et fiche de l'EPN, tableau de bord de l'EPN, comparaison
+    de ses rapports trimestre par trimestre."""
+    import json
+    _profil_temporaire(monkeypatch, tmp_path)
+    from analyse_cb import historique, tableau
+    from analyse_cb.analyse import charger_parametres
+    params = charger_parametres()
+    for periode in ("1er trimestre 2099", "2e trimestre 2099", "3e trimestre 2099"):
+        res = analyser(rapports["conforme"], InfosRapport(periode=periode), decrets=references["decret"],
+                       situations=references["situation"])
+        historique.enregistrer(res, tmp_path / f"{periode}.xlsx")
+    (fiche,) = historique.epns()
+    cle = fiche["cle"]
+    assert fiche["nb"] == 3 and [p["court"] for p in fiche["periodes"]] == ["T3 2099", "T2 2099", "T1 2099"]
+    assert [p["cle"] for p in historique.periodes(epn=cle)] == ["2099-T3", "2099-T2", "2099-T1"]
+    assert historique.periodes(epn="epn inconnu") == [] and len(historique.fiche_epn(cle)["analyses"]) == 3
+    d = tableau.tableau_de_bord(None, params, epn=cle)
+    assert d["epn"]["cle"] == cle and d["periode"]["cle"] == "2099-T3" and len(d["lignes"]) == 1
+    assert [g["libelle"] for g in d["graphiques"]["trimestre"]] == ["T1 2099", "T2 2099", "T3 2099"]
+    assert d["categories"] and all(c["statut"] for c in d["categories"])
+    assert tableau.tableau_de_bord(None, params, epn="epn inconnu")["epn"] is None  # EPN inconnu : ensemble des EPN
+    c = tableau.comparaison_epn(cle, None, params)
+    assert c["annee"] == 2099 and [col["code"] for col in c["colonnes"]] == ["T1", "T2", "T3", "T4"]
+    assert [col["present"] for col in c["colonnes"]] == [True, True, True, False]
+    t1, t2 = c["colonnes"][0], c["colonnes"][1]
+    assert t1["execution_periode"] == t1["execution"] and t2["execution_periode"] == t2["execution"] - t1["execution"]
+    # T4 2099 : date limite (15/01/2100) non atteinte, le rapport est « à venir » et non manquant
+    assert "3 rapports trimestriels" in c["lecture"] and "T4 à venir (date limite : 15/01/2100)" in c["lecture"]
+    assert "manque" not in c["lecture"]
+    assert c["colonnes"][3]["a_venir"] is True and c["colonnes"][3]["echeance"] == "2100-01-15"
+    assert tableau.comparaison_epn("tous", 2099, params)["colonnes"][0]["present"]
+    # Nature économique : l'EPN suivi, puis un rapport de l'EPN analysé sans le détail par nature
+    n = tableau.analyse_natures("2099-T3", cle, params)
+    assert n["choix"] == cle and not n["non_disponible"] and (n["categories"] or n["recettes"])
+    con = historique.connexion()
+    row = con.execute("SELECT id, donnees FROM analyses WHERE periode_cle = '2099-T1'").fetchone()
+    donnees = json.loads(row["donnees"])
+    donnees.pop("natures", None)
+    con.execute("UPDATE analyses SET donnees = ? WHERE id = ?", (json.dumps(donnees), row["id"]))
+    # Un second EPN, présent au T2 seulement : l'exécution du trimestre ne porte que sur les EPN des deux trimestres
+    autre = dict(con.execute("SELECT * FROM analyses WHERE periode_cle = '2099-T2'").fetchone())
+    autre.pop("id")
+    autre.update(cle="autre epn|2099-T2", epn="Autre établissement", sigle="AE")
+    con.execute(f"INSERT INTO analyses ({', '.join(autre)}) VALUES ({', '.join('?' * len(autre))})", list(autre.values()))
+    con.commit()
+    con.close()
+    n = tableau.analyse_natures("2099-T1", cle, params)
+    assert n["non_disponible"] and n["choix"] == cle and n["a_reanalyser"] == 1
+    tous = tableau.comparaison_epn("tous", 2099, params)
+    c1, c2 = tous["colonnes"][0], tous["colonnes"][1]
+    assert c2["nb"] == 2 and c2["base_periode"] == 1
+    assert c2["execution_periode"] == pytest.approx(t2["execution"] - t1["execution"])
+    assert "Le nombre de rapports analysés varie d'un trimestre à l'autre (1 au T1, 2 au T2, 1 au T3)" in tous["lecture"]
+    assert len(historique.epns()) == 2 and tableau.comparaison_epn(cle, 2099, params)["colonnes"][1]["nb"] == 1
+
+
 def test_statut_execution_selon_periode():
     from analyse_cb.tableau import statut_execution
     p = {"execution": {"seuil_vigilance": 10, "seuil_sous_execution": 20}}
@@ -747,6 +804,17 @@ def test_serveur_interface_et_api(rapports, references, tmp_path, monkeypatch):
         assert t["rapports"][0]["etat"] == "ok", t
         res = t["resultats"][0]
         assert Path(res["fichier"]).exists() and res["epn"]
+        dossier = Path(res["dossier"])  # <sortie>/<EPN>/<période>/ : analyse et copie du rapport
+        assert dossier.parent.parent == tmp_path / "sortie" and dossier.name == res["periode_cle"]
+        assert Path(res["fichier"]).parent == dossier and (dossier / Path(rapports["conforme"]).name).exists()
+        assert appel("/api/epns")["epns"][0]["cle"] == res["epn_cle"]
+        fiche = appel("/api/epn?cle=" + quote(res["epn_cle"]))
+        assert fiche["analyses"][0]["rapport_conserve"] and fiche["dossier_existe"]
+        assert appel("/api/ouvrir", {"quoi": "rapport", "id": res["id"]})["ok"]
+        assert appel("/api/ouvrir", {"quoi": "dossier_epn", "cle": res["epn_cle"]})["ok"]
+        assert appel("/api/tableau?epn=" + quote(res["epn_cle"]))["epn"]["cle"] == res["epn_cle"]
+        comp = appel("/api/comparaison?epn=" + quote(res["epn_cle"]))
+        assert comp["epn"] == res["epn_cle"] and any(c["present"] for c in comp["colonnes"])
         assert res["date_limite"] == "2099-07-15" and res["ecart_jours"] == 13 and res["delai"] == "Hors délai de 13 jours"
         tb = appel("/api/tableau")
         assert not tb["vide"] and tb["lignes"][0]["id"] == res["id"]

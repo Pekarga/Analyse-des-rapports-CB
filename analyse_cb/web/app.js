@@ -8,7 +8,7 @@ function signaler(message) {
 }
 window.addEventListener("error", e => signaler(`${e.message} (${(e.filename || "").split("/").pop()}:${e.lineno}:${e.colno})`));
 window.addEventListener("unhandledrejection", e => signaler((e.reason && (e.reason.stack || e.reason.message)) || e.reason));
-const etat = { app: null, periode: null, analyse: { rapports: [], decrets: [], situations: [] }, suivi: null };
+const etat = { app: null, periode: null, epn: "", annee: null, analyse: { rapports: [], decrets: [], situations: [] }, suivi: null };
 
 /* ------------------------------------------------------------------ icônes (24 × 24, trait) */
 const ICONES = {
@@ -85,7 +85,7 @@ const PAGES = [
   ["ratios", "Analyse des ratios", "pourcent"],
   ["natures", "Nature économique", "couches"],
   ["alertes", "Alertes & Anomalies", "alerte"],
-  ["rapports", "Rapports détaillés", "rapports"],
+  ["epn", "Analyses par EPN", "dossier"],
   ["parametres", "Paramètres", "parametres"],
   ["aide", "Aide", "aide"],
   ["apropos", "À propos", "utilisateur"],
@@ -119,10 +119,14 @@ async function majEnvironnement() {
   } catch (err) { toast(err.message, "erreur"); }
 }
 async function router() {
-  const page = (location.hash.replace(/^#\/?/, "") || "tableau").split("?")[0];
-  document.querySelectorAll(".nav a").forEach(a => a.classList.toggle("actif", a.dataset.page === page));
+  const chemin = (location.hash.replace(/^#\/?/, "") || "tableau").split("?")[0];
+  const [page, ...reste] = chemin.split("/");
+  const param = decodeURIComponent(reste.join("/"));
+  const actif = page === "rapports" ? "epn" : page;
+  window.scrollTo(0, 0);
+  document.querySelectorAll(".nav a").forEach(a => a.classList.toggle("actif", a.dataset.page === actif));
   const rendu = { tableau: pageTableau, analyse: pageAnalyse, comparaison: pageComparaison, ratios: pageRatios, natures: pageNatures, alertes: pageAlertes,
-    rapports: pageRapports, parametres: pageParametres, aide: pageAide, apropos: pageAPropos }[page] || pageTableau;
+    epn: () => pageEpn(param), rapports: pageRapports, parametres: pageParametres, aide: pageAide, apropos: pageAPropos }[page] || pageTableau;
   try { await rendu(); } catch (err) { contenu().innerHTML = videHtml("alerte", "Une erreur est survenue", esc(err.message)); }
   contenu().focus();
 }
@@ -177,10 +181,39 @@ function brancherPeriode(rafraichir) {
   const s = document.getElementById("periode");
   if (s) s.onchange = () => { etat.periode = s.value || null; rafraichir(); };
 }
+/* EPN suivi : « Ensemble des EPN » ("") ou un EPN, commun aux pages et mémorisé sur ce poste. */
+function lireEpn() { try { return localStorage.getItem("epn") || ""; } catch (_) { return ""; } }
+function choisirEpn(cle) {
+  etat.epn = cle || "";
+  try { localStorage.setItem("epn", etat.epn); } catch (_) { /* stockage indisponible */ }
+}
+function requete(params) {
+  const u = new URLSearchParams();
+  Object.entries(params).forEach(([k, v]) => { if (v) u.set(k, v); });
+  return u.toString() ? "?" + u : "";
+}
+function choixEpnHtml(epns, actuel, ensemble = "") {
+  if (!epns || !epns.length) return "";
+  const opts = [`<option value="${ensemble}">Ensemble des EPN (${epns.length})</option>`].concat(epns.map(e =>
+    `<option value="${esc(e.cle)}" ${e.cle === actuel ? "selected" : ""} title="${esc(e.epn)}">${esc(e.court)}${e.court !== e.epn ? " – " + esc(tronquer(e.epn, 38)) : ""}</option>`));
+  return `<div class="choix-periode choix-epn">${icone("dossier")}<label for="epn">EPN :</label><select id="epn">${opts.join("")}</select></div>`;
+}
+function brancherEpn(rafraichir) {
+  const s = document.getElementById("epn");
+  if (s) s.onchange = () => { choisirEpn(s.value === "tous" ? "" : s.value); etat.periode = null; rafraichir(); };
+}
+function allerEpn(cle, page, periode = null) {
+  choisirEpn(cle);
+  etat.periode = periode;
+  fermerTiroir();
+  const cible = "#/" + page;
+  if (location.hash === cible) router(); else location.replace(cible);
+}
 function videHtml(ic, titre, texte, bouton = "") {
   return `<div class="panneau vide">${icone(ic)}<h3>${titre}</h3><p>${texte}</p>${bouton}</div>`;
 }
 const BOUTON_ANALYSER = `<a class="bouton primaire" href="#/analyse">${icone("depot")}Analyser des rapports</a>`;
+function statutTexte(statut) { return statut === "OK" ? statut : String(statut).toLowerCase(); }
 function statutHtml(texte, couleur) { return `<span class="statut ${couleur}">${esc(texte)}</span>`; }
 
 /* ------------------------------------------------------------------ graphiques SVG */
@@ -234,6 +267,8 @@ function svgBarresCourbe(points, u, L) {
       else {
         ly = yp + 11;
         if (chevauche(zone(ly), dessus) && haut > 26 && !chevauche(zone(ly), dessous)) dedans = true;
+        // point du taux posé sur le haut de la barre : valeur dans la barre, taux au-dessus du point
+        else if (chevauche(zone(ly), dessus) && haut > 26) { ly = Math.max(2, yp - 34); dedans = true; }
       }
     }
     boites.push(ly);
@@ -308,7 +343,11 @@ function carteKpi(ic, fond, libelle, valeur, delta) {
   return `<div class="kpi"><div class="icone ${fond}">${icone(ic)}</div><div style="min-width:0"><div class="libelle">${libelle}</div><div class="valeur">${valeur}</div>${delta}</div></div>`;
 }
 async function pageTableau() {
-  const d = await api("/api/tableau" + (etat.periode ? "?periode=" + encodeURIComponent(etat.periode) : ""));
+  let d = await api("/api/tableau" + requete({ periode: etat.periode, epn: etat.epn }));
+  if (etat.epn && !d.epn) {  // EPN retiré de l'historique : retour à l'ensemble des EPN
+    choisirEpn("");
+    d = await api("/api/tableau" + requete({ periode: etat.periode }));
+  }
   if (d.vide) {
     contenu().innerHTML = entete("Tableau de bord", "Analyse des rapports des contrôleurs budgétaires")
       + videHtml("analyse", "Aucun rapport analysé pour le moment", "Analysez les rapports des Contrôleurs Budgétaires : le tableau de bord se remplit automatiquement.", BOUTON_ANALYSER);
@@ -316,8 +355,8 @@ async function pageTableau() {
   }
   etat.periode = d.periode.cle;
   majBadge(d.badge);
-  const u = d.unite, k = d.kpi, c = d.comparaison;
-  const actions = choixPeriode(d.periodes, d.periode.cle)
+  const u = d.unite, k = d.kpi, c = d.comparaison, unEpn = !!d.epn;
+  const actions = choixEpnHtml(d.epns, etat.epn) + choixPeriode(d.periodes, d.periode.cle)
     + `<button class="bouton" id="exporter">${icone("export")}Exporter</button>`
     + `<button class="bouton primaire" id="actualiser">${icone("actualiser")}Actualiser</button>`;
   const sousExec = d.lignes.filter(l => l.statut === "Sous-exécution" || l.statut === "À surveiller").length;
@@ -326,7 +365,8 @@ async function pageTableau() {
     ${carteKpi("coche", "fond-vert", "Exécution budgétaire", montant(k.execution, u), variationHtml(c.execution, c.libelle))}
     ${carteKpi("pourcent", "fond-orange", "Taux d'exécution", pct(k.taux), variationHtml(c.taux, c.libelle, true))}
     ${carteKpi("alerte", "fond-rouge", "Écarts à analyser", montant(k.ecarts, u),
-      c.ecarts != null ? variationHtml(c.ecarts, c.libelle, false, true) : `<div class="delta">${sousExec} EPN à suivre sur ${k.epn}</div>`)}
+      c.ecarts != null ? variationHtml(c.ecarts, c.libelle, false, true)
+        : unEpn ? `<div class="delta">statut : ${esc(statutTexte((d.lignes[0] || {}).statut || "—"))}</div>` : `<div class="delta">${sousExec} EPN à suivre sur ${k.epn}</div>`)}
   </div>`;
 
   const evolution = `<div class="panneau"><h2>${icone("histogramme")}Évolution de l'exécution budgétaire</h2>
@@ -348,25 +388,37 @@ async function pageTableau() {
 
   const tot = d.kpi;
   const ecartHtml = v => v == null ? "—" : signe(v, nf1.format(Math.abs(v) / u.diviseur));
-  const ligneHtml = (l, parEpn) => `<tr ${parEpn ? `class="cliquable" data-id="${l.id}" title="Voir l'analyse du rapport"` : ""}>
+  const ligneHtml = (l, parEpn) => `<tr ${parEpn ? `class="cliquable" data-epn="${esc(l.epn_cle)}" title="Afficher le tableau de bord de cet EPN"` : ""}>
       <td class="texte"><b>${esc(parEpn ? l.court : l.libelle)}</b><div class="sous-ligne">${esc(parEpn ? l.tutelle : `${l.epn} EPN`)}</div></td>
       <td>${montant(l.credits, u, false)}</td><td>${montant(l.execution, u, false)}</td>
       <td class="${l.statut === "OK" ? "taux-ok" : l.statut === "Non renseigné" ? "" : "taux-ko"}">${pct(l.taux)}</td>
       <td>${ecartHtml(l.ecart)}</td><td class="centre">${statutHtml(l.statut, l.couleur)}</td></tr>`;
   const ligneTotal = `<tr class="total"><td class="texte">Total</td><td>${montant(tot.credits, u, false)}</td><td>${montant(tot.execution, u, false)}</td><td>${pct(tot.taux)}</td><td>${ecartHtml(tot.ecart_net)}</td><td class="centre">–</td></tr>`;
   const sources = [...new Set(d.lignes.map(l => l.source).filter(Boolean))];
-  const detail = `<div class="panneau"><h2>${icone("tableau")}<span id="titre-detail">Détail par EPN</span>
-      <span class="droite onglets compact" id="onglets-detail"><button data-v="epn" class="actif">EPN</button><button data-v="ministere">Ministère</button></span></h2>
-    <div class="defilant"><table class="donnees"><thead><tr><th id="col-detail">EPN</th><th>Crédits<small>${esc(u.libelle)}</small></th><th>Exécution<small>${esc(u.libelle)}</small></th><th>Taux<small>%</small></th><th>Écart<small>${esc(u.libelle)}</small></th><th>Statut</th></tr></thead>
-    <tbody id="corps-detail"></tbody></table></div>
-    <p class="aide" style="margin:10px 0 0">Source des montants : ${esc(sources.join(" ; ") || "—")}. Taux attendu à la fin de la période : ${nf0.format(d.attendu)} % (statut « OK » à partir de ${nf0.format(d.objectif)} %).</p></div>`;
+  const enTete = `<tr><th id="col-detail">${unEpn ? "Catégorie de dépense" : "EPN"}</th><th>Crédits<small>${esc(u.libelle)}</small></th><th>Exécution<small>${esc(u.libelle)}</small></th><th>Taux<small>%</small></th><th>Écart<small>${esc(u.libelle)}</small></th><th>Statut</th></tr>`;
+  const pied = `<p class="aide" style="margin:10px 0 0">Source des montants : ${esc(sources.join(" ; ") || "—")}. Taux attendu à la fin de la période : ${nf0.format(d.attendu)} % (statut « OK » à partir de ${nf0.format(d.objectif)} %).</p>`;
+  const detail = unEpn
+    ? `<div class="panneau"><h2>${icone("tableau")}Exécution par catégorie de dépense</h2>
+        <div class="defilant"><table class="donnees"><thead>${enTete}</thead><tbody>
+        ${d.categories.map(l => `<tr><td class="texte"><b>${esc(l.libelle)}</b></td><td>${montant(l.credits, u, false)}</td><td>${montant(l.execution, u, false)}</td>
+          <td class="${l.statut === "OK" ? "taux-ok" : l.statut === "Non renseigné" ? "" : "taux-ko"}">${pct(l.taux)}</td><td>${ecartHtml(l.ecart)}</td><td class="centre">${statutHtml(l.statut, l.couleur)}</td></tr>`).join("")
+          || `<tr><td colspan="6" class="texte" style="text-align:center;color:#6b778a">Répartition par catégorie non disponible pour ce rapport.</td></tr>`}
+        ${ligneTotal}</tbody></table></div>${pied}</div>`
+    : `<div class="panneau"><h2>${icone("tableau")}<span id="titre-detail">Détail par EPN</span>
+        <span class="droite onglets compact" id="onglets-detail"><button data-v="epn" class="actif">EPN</button><button data-v="ministere">Ministère</button></span></h2>
+        <div class="defilant"><table class="donnees"><thead>${enTete}</thead><tbody id="corps-detail"></tbody></table></div>
+        <p class="aide" style="margin:8px 0 0">Cliquez sur un EPN pour afficher son propre tableau de bord.</p>${pied}</div>`;
 
+  const vues = unEpn ? [["trimestre", "Par trimestre"], ["nature", "Par nature de dépense"]] : [["epn", "Par EPN"], ["nature", "Par nature de dépense"]];
   const graph = `<div class="panneau"><h2>${icone("courbe")}Graphique d'analyse</h2>
-    <div class="onglets" id="onglets-graph"><button data-g="epn" class="actif">Par EPN</button><button data-g="nature">Par nature de dépense</button></div>
-    <div class="legende" style="justify-content:flex-end"><span><i style="background:#1565d8"></i>Prévu</span><span><i style="background:#f59e0b"></i>Réalisé</span></div>
+    <div class="onglets" id="onglets-graph">${vues.map(([cle, lib], i) => `<button data-g="${cle}" class="${i ? "" : "actif"}">${lib}</button>`).join("")}</div>
+    <div class="legende" style="justify-content:flex-end"><span><i style="background:#1565d8"></i>${unEpn ? "Crédits / prévu" : "Prévu"}</span><span><i style="background:#f59e0b"></i>${unEpn ? "Exécution / réalisé" : "Réalisé"}</span></div>
     <div class="graphique" id="graph-analyse"></div></div>`;
 
-  contenu().innerHTML = entete("Tableau de bord", "Analyse des rapports des contrôleurs budgétaires", actions)
+  const titre = unEpn ? `Tableau de bord <span class="titre-epn">${esc(d.epn.court)}</span>` : "Tableau de bord";
+  const sous = unEpn ? `${esc(d.epn.epn)}${d.epn.tutelle ? " · " + esc(d.epn.tutelle) : ""} · <a class="lien-fiche" href="#/epn/${encodeURIComponent(d.epn.cle)}">${icone("dossier")}Fiche et analyses de l'EPN</a>`
+    : "Ensemble des EPN · analyse des rapports des contrôleurs budgétaires";
+  contenu().innerHTML = entete(titre, sous, actions)
     + kpis + `<div class="grille-3">${evolution}${panneauRatios}${synthese}</div>` + `<div class="grille-2">${detail}${graph}</div>`
     + panneauDifficultesHtml(d.difficultes);
   brancherDifficultes();
@@ -379,27 +431,106 @@ async function pageTableau() {
     document.querySelectorAll("#onglets-graph button").forEach(b => b.classList.toggle("actif", b.dataset.g === cle));
   };
   graphique(document.getElementById("graph-evolution-tdb"), L => svgBarresCourbe(d.evolution, u, L));
-  dessiner("epn");
+  dessiner(vues[0][0]);
   document.querySelectorAll("#onglets-graph button").forEach(b => b.onclick = () => dessiner(b.dataset.g));
-  const vueDetail = v => {
-    const parEpn = v === "epn";
-    document.getElementById("corps-detail").innerHTML = (parEpn ? d.lignes : d.ministeres).map(l => ligneHtml(l, parEpn)).join("") + ligneTotal;
-    document.getElementById("titre-detail").textContent = parEpn ? "Détail par EPN" : "Détail par ministère";
-    document.getElementById("col-detail").textContent = parEpn ? "EPN" : "Ministère de tutelle";
-    document.querySelectorAll("#onglets-detail button").forEach(b => b.classList.toggle("actif", b.dataset.v === v));
-    document.querySelectorAll("#corps-detail tr.cliquable").forEach(tr => tr.onclick = () => ouvrirRapport(+tr.dataset.id));
-  };
-  vueDetail("epn");
-  document.querySelectorAll("#onglets-detail button").forEach(b => b.onclick = () => vueDetail(b.dataset.v));
+  if (!unEpn) {
+    const vueDetail = v => {
+      const parEpn = v === "epn";
+      document.getElementById("corps-detail").innerHTML = (parEpn ? d.lignes : d.ministeres).map(l => ligneHtml(l, parEpn)).join("") + ligneTotal;
+      document.getElementById("titre-detail").textContent = parEpn ? "Détail par EPN" : "Détail par ministère";
+      document.getElementById("col-detail").textContent = parEpn ? "EPN" : "Ministère de tutelle";
+      document.querySelectorAll("#onglets-detail button").forEach(b => b.classList.toggle("actif", b.dataset.v === v));
+      document.querySelectorAll("#corps-detail tr.cliquable").forEach(tr => tr.onclick = () => { choisirEpn(tr.dataset.epn); window.scrollTo(0, 0); pageTableau(); });
+    };
+    vueDetail("epn");
+    document.querySelectorAll("#onglets-detail button").forEach(b => b.onclick = () => vueDetail(b.dataset.v));
+  }
   brancherPeriode(pageTableau);
+  brancherEpn(pageTableau);
   document.getElementById("actualiser").onclick = async () => { await majEnvironnement(); await pageTableau(); toast("Tableau de bord actualisé."); };
   document.getElementById("exporter").onclick = async () => {
-    try { const r = await post("/api/exporter", { periode: etat.periode }); toast("Tableau de bord exporté : " + r.chemin); }
+    try { const r = await post("/api/exporter", { periode: etat.periode, epn: etat.epn }); toast("Tableau de bord exporté : " + r.chemin); }
     catch (err) { toast(err.message, "erreur"); }
   };
 }
 
-/* ------------------------------------------------------------------ ratios de gestion */
+/* ------------------------------------------------------------------ analyses par EPN */
+const ORDRE_PERIODES = [[1, "T1"], [2, "T2"], [3, "T3"], [4, "T4"], [5, "Annuel"]];
+function friseHtml(periodes, annee, avecAnnee = false) {
+  return `<div class="frise">${avecAnnee ? `<span class="annee-frise">${annee}</span>` : ""}${ORDRE_PERIODES.map(([rang, lib]) => {
+    const p = periodes.find(x => x.annee === annee && x.rang === rang);
+    if (!p && rang === 5) return "";
+    const cls = !p ? "absent" : p.retour ? "retour" : "present";
+    const titre = !p ? `${lib} ${annee} : rapport non analysé` : `${lib} ${annee} : ${p.retour ? "retour au CB" : "exploitable"}${p.forme != null ? ", forme " + nf0.format(p.forme) + " %" : ""}`;
+    return `<span class="puce-periode ${cls}" title="${esc(titre)}" ${p ? `data-id="${p.id}"` : ""}>${lib}</span>`;
+  }).join("")}</div>`;
+}
+async function pageEpn(cle) {
+  if (cle) return ficheEpn(cle);
+  const { epns } = await api("/api/epns");
+  const bascule = `<div class="onglets compact"><button class="actif" type="button">Par EPN</button><button type="button" id="vers-liste">Toutes les analyses</button></div>`;
+  if (!epns.length) {
+    contenu().innerHTML = entete("Analyses par EPN", "Les analyses effectuées, rangées par EPN") + videHtml("dossier", "Aucune analyse enregistrée", "Les analyses réalisées apparaîtront ici, rangées par EPN.", BOUTON_ANALYSER);
+    return;
+  }
+  contenu().innerHTML = entete("Analyses par EPN", `${accord(epns.length, "EPN suivi", "EPN suivis")} · ${accord(epns.reduce((a, e) => a + e.nb, 0), "analyse enregistrée", "analyses enregistrées")} : cliquez sur un EPN pour ouvrir sa fiche`,
+    bascule + `<div class="choix-periode"><input id="recherche-epn" placeholder="Rechercher un EPN, une tutelle, un CB…" style="border:0;outline:0;min-width:240px"></div>`)
+    + `<div class="grille-epn" id="grille-epn"></div>`;
+  const remplir = () => {
+    const q = document.getElementById("recherche-epn").value.toLowerCase();
+    const liste = epns.filter(e => !q || `${e.court} ${e.epn} ${e.tutelle} ${e.controleur}`.toLowerCase().includes(q));
+    document.getElementById("grille-epn").innerHTML = liste.map(e => `<div class="carte-epn" data-cle="${esc(e.cle)}" tabindex="0" role="button">
+        <div class="tete-epn"><span class="sigle-epn">${esc(e.court)}</span><span class="nb-epn">${accord(e.nb, "analyse", "analyses")}</span></div>
+        <div class="nom-epn">${esc(e.epn)}</div><div class="sous-ligne">${esc(e.tutelle || "")}${e.controleur ? " · CB : " + esc(e.controleur) : ""}</div>
+        ${friseHtml(e.periodes, e.annees[0], true)}
+        <div class="pied-epn"><span>Dernière : <b>${esc(e.derniere.periode)}</b> · forme ${pct(e.derniere.forme)}</span>${statutHtml(e.derniere.retour ? "Retour au CB" : "Exploitable", e.derniere.retour ? "rouge" : "vert")}</div></div>`).join("")
+      || `<div class="panneau vide"><p>Aucun EPN ne correspond à la recherche.</p></div>`;
+    document.querySelectorAll(".carte-epn").forEach(c => {
+      c.onclick = () => location.replace("#/epn/" + encodeURIComponent(c.dataset.cle));
+      c.onkeydown = ev => { if (ev.key === "Enter") c.onclick(); };
+    });
+  };
+  document.getElementById("recherche-epn").oninput = remplir;
+  document.getElementById("vers-liste").onclick = () => location.replace("#/rapports");
+  remplir();
+}
+async function ficheEpn(cle) {
+  let f;
+  try { f = await api("/api/epn?cle=" + encodeURIComponent(cle)); }
+  catch (err) { location.replace("#/epn"); return; }
+  const actions = `<button class="bouton primaire" id="f-tdb">${icone("accueil")}Tableau de bord</button>
+    <button class="bouton" id="f-comp">${icone("comparaison")}Comparer les rapports</button>
+    <button class="bouton" id="f-nat">${icone("couches")}Nature économique</button>
+    <button class="bouton" id="f-dossier" ${f.dossier_existe || f.analyses.some(a => a.fichier_existe) ? "" : "disabled"}>${icone("dossier")}Ouvrir le dossier</button>`;
+  const lignes = a => `<tr>
+      <td class="centre"><b>${esc(a.court)}</b></td><td class="texte"><span title="${esc(a.rapport)}">${esc(tronquer(a.rapport, 46))}</span><div class="sous-ligne">CB : ${esc(a.controleur || "non identifié")} · analysé le ${dateFr(a.date_analyse)}</div></td>
+      <td class="centre">${a.ecart_jours == null ? '<span class="nc">non renseigné</span>' : a.ecart_jours > 0 ? statutHtml(`${a.ecart_jours} j de retard`, "rouge") : statutHtml("Dans les délais", "vert")}
+        <div class="sous-ligne">${a.date_reception ? `reçu le ${dateFr(a.date_reception)} · ` : ""}${a.date_limite ? `limite ${dateFr(a.date_limite)}` : ""}</div></td>
+      <td>${pct(a.score_forme)}</td><td>${pct(a.score_fond)}</td><td class="centre">${a.anomalies_majeures}</td>
+      <td class="centre">${statutHtml(a.retour ? "Retour au CB" : "Exploitable", a.retour ? "rouge" : "vert")}</td>
+      <td class="centre"><div class="actions-ligne"><button class="bouton petit" data-voir="${a.id}">Voir</button><button class="bouton petit" data-excel="${a.id}" ${a.fichier_existe ? "" : "disabled"} title="Ouvrir le fichier d'analyse">Excel</button><button class="bouton petit" data-rapport="${a.id}" ${a.rapport_conserve ? "" : "disabled"} title="${a.rapport_conserve ? "Ouvrir le rapport du CB" : "Rapport non conservé (analyse antérieure à la version 3.4)"}">Rapport</button></div></td></tr>`;
+  const exercices = f.annees.map(an => {
+    const liste = f.analyses.filter(a => a.annee === an).sort((x, y) => x.rang - y.rang);
+    return `<div class="panneau" style="margin-top:16px"><h2>${icone("calendrier")}Exercice ${an}<span class="droite">${friseHtml(liste.map(a => ({ ...a, retour: a.retour, forme: a.score_forme })), an)}</span></h2>
+      <div class="defilant"><table class="donnees table-fiche"><thead><tr><th>Période</th><th>Rapport</th><th>Transmission</th><th>Forme</th><th>Fond</th><th>Anomalies majeures</th><th>Suite</th><th></th></tr></thead>
+      <tbody>${liste.map(lignes).join("")}</tbody></table></div></div>`;
+  }).join("");
+  contenu().innerHTML = entete(`<a class="fil" href="#/epn">Analyses par EPN</a> <span class="fil-sep">›</span> ${esc(f.sigle || tronquer(f.epn, 40))}`,
+    `${esc(f.epn)}${f.tutelle ? " · " + esc(f.tutelle) : ""}${f.controleurs.length ? " · CB : " + esc(f.controleurs.join(", ")) : ""}`, actions)
+    + `<div class="panneau"><h2>${icone("dossier")}Conservation des analyses</h2><p class="aide" style="margin:0">${accord(f.analyses.length, "analyse enregistrée", "analyses enregistrées")}.
+      ${f.dossier_existe ? `Les fichiers d'analyse et les rapports sont rangés dans <b>${esc(f.dossier)}</b>, un sous-dossier par période.` : "Les analyses antérieures à la version 3.4 restent à leur emplacement d'origine ; les prochaines seront rangées dans un dossier propre à l'EPN."}</p></div>`
+    + exercices;
+  document.getElementById("f-tdb").onclick = () => allerEpn(cle, "tableau");
+  document.getElementById("f-comp").onclick = () => allerEpn(cle, "comparaison");
+  document.getElementById("f-nat").onclick = () => allerEpn(cle, "natures");
+  document.getElementById("f-dossier").onclick = () => post("/api/ouvrir", { quoi: "dossier_epn", cle }).catch(err => toast(err.message, "erreur"));
+  document.querySelectorAll("[data-voir]").forEach(b => b.onclick = () => ouvrirRapport(+b.dataset.voir));
+  document.querySelectorAll("[data-excel]").forEach(b => b.onclick = () => post("/api/ouvrir", { quoi: "fichier", id: +b.dataset.excel }).catch(err => toast(err.message, "erreur")));
+  document.querySelectorAll("[data-rapport]").forEach(b => b.onclick = () => post("/api/ouvrir", { quoi: "rapport", id: +b.dataset.rapport }).catch(err => toast(err.message, "erreur")));
+  document.querySelectorAll(".puce-periode[data-id]").forEach(x => x.onclick = () => ouvrirRapport(+x.dataset.id));
+}
+
+/* ------------------------------------------------------------------ ratios de gestion *//* ------------------------------------------------------------------ ratios de gestion */
 const COUL_RATIOS = { RRP: "#1f9d4c", RDP: "#9b59b6", RDF: "#f59e0b", RDI: "#1565d8", RDA: "#a0aec0" };
 const FOND_RATIOS = { RRP: "fond-vert", RDP: "fond-violet", RDF: "fond-orange", RDI: "fond-bleu", RDA: "fond-gris" };
 const COUL_CATEGORIES = { personnel: "#9b59b6", biens_services: "#f59e0b", transferts: "#14a3a3", investissement: "#1565d8", autres: "#a0aec0" };
@@ -430,7 +561,7 @@ function panneauRatiosHtml(r) {
   }
   const manque = r.rapports - r.disponibles;
   return `<div class="panneau">${tete}${jaugesRatios(r.agreges.filter(x => x.code !== "RDA" || x.valeur != null))}${citationsHtml(r.citations)}
-    <p class="aide pied">Ensemble des EPN, pondéré par les montants. Base : ${esc(r.bases.join(", "))} ; source : ${esc(r.sources.join(", "))}.${manque ? ` ${pluriel(manque, "rapport")} à réanalyser.` : ""}</p></div>`;
+    <p class="aide pied">${r.portee ? esc(r.portee) : "Ensemble des EPN, pondéré par les montants"}. Base : ${esc(r.bases.join(", "))} ; source : ${esc(r.sources.join(", "))}.${manque ? ` ${pluriel(manque, "rapport")} à réanalyser.` : ""}</p></div>`;
 }
 function svgStructure(lignes, L) {
   const rows = lignes.filter(l => l.structure.length);
@@ -546,23 +677,19 @@ function svgNatures(items, u, L) {
   return s + "</svg>";
 }
 async function pageNatures() {
-  const q = new URLSearchParams();
-  if (etat.periode) q.set("periode", etat.periode);
-  if (etat.natureChoix) q.set("epn", etat.natureChoix);
-  const d = await api("/api/natures?" + q);
+  const d = await api("/api/natures" + requete({ periode: etat.periode, epn: etat.epn }));
   if (d.vide) {
     contenu().innerHTML = entete("Analyse par nature économique", "Exécution des dépenses et des recettes, nature par nature") + videHtml("couches", "Aucune donnée", "Analysez d'abord des rapports.", BOUTON_ANALYSER);
     return;
   }
   etat.periode = d.periode.cle;
   const u = d.unite;
-  const choixEpn = d.epns.length ? `<div class="choix-periode">${icone("rapports")}<label for="epn-nature">EPN :</label><select id="epn-nature">
-      ${d.epns.length > 1 ? `<option value="tous" ${d.choix === "tous" ? "selected" : ""}>Ensemble des EPN (${d.epns.length})</option>` : ""}
-      ${d.epns.map(e => `<option value="${e.id}" ${String(e.id) === d.choix ? "selected" : ""}>${esc(e.epn)}</option>`).join("")}</select></div>` : "";
-  const tete = entete("Analyse par nature économique", "Exécution des dépenses et des recettes, nature par nature", choixPeriode(d.periodes, d.periode.cle) + choixEpn);
-  if (!d.epns.length) {
+  const choixEpn = choixEpnHtml(d.epns, etat.epn);
+  const tete = entete("Analyse par nature économique", "Exécution des dépenses et des recettes, nature par nature", choixEpn + choixPeriode(d.periodes, d.periode.cle));
+  if (!d.disponibles.length || d.non_disponible) {
     contenu().innerHTML = tete + videHtml("couches", "Analyse par nature non disponible", "Relancez l'analyse des rapports de cette période avec cette version de l'application (situation d'exécution SIGOBE de préférence).", BOUTON_ANALYSER);
     brancherPeriode(pageNatures);
+    brancherEpn(pageNatures);
     return;
   }
   const t = d.total, inscrites = d.categories.reduce((a, c) => a + c.natures.length, 0);
@@ -608,14 +735,13 @@ async function pageNatures() {
       tr.hidden = f === "examiner" ? !tr.classList.contains("a-examiner") : f === "supprimees" ? !tr.classList.contains("supprimee") : false;
     });
   });
-  const sel = document.getElementById("epn-nature");
-  if (sel) sel.onchange = () => { etat.natureChoix = sel.value; pageNatures(); };
   brancherPeriode(pageNatures);
+  brancherEpn(pageNatures);
 }
 
 /* ------------------------------------------------------------------ analyse des ratios */
 async function pageRatios() {
-  const d = await api("/api/ratios" + (etat.periode ? "?periode=" + encodeURIComponent(etat.periode) : ""));
+  const d = await api("/api/ratios" + requete({ periode: etat.periode, epn: etat.epn }));
   if (d.vide) {
     contenu().innerHTML = entete("Analyse des ratios", "Ratios de gestion du canevas") + videHtml("pourcent", "Aucune donnée", "Analysez d'abord des rapports.", BOUTON_ANALYSER);
     return;
@@ -644,7 +770,7 @@ async function pageRatios() {
     <div class="champ" style="margin-bottom:10px;max-width:420px"><select id="epn-ratios">${options}</select></div>
     <div class="legende" id="legende-ratios" style="justify-content:flex-start">${["RRP", "RDP", "RDF", "RDI"].map(c => `<span><i class="rond" style="background:${COUL_RATIOS[c]}"></i>${c}</span>`).join("")}</div>
     <div class="graphique" id="graph-ratios"></div></div>`;
-  contenu().innerHTML = entete("Analyse des ratios", "Ratios de gestion du canevas, par EPN et pour l'ensemble de la période", choixPeriode(d.periodes, d.periode.cle))
+  contenu().innerHTML = entete("Analyse des ratios", d.epn ? "Ratios de gestion du canevas de l'EPN" : "Ratios de gestion du canevas, par EPN et pour l'ensemble de la période", choixEpnHtml(d.epns, etat.epn) + choixPeriode(d.periodes, d.periode.cle))
     + cartes + tableau + `<div class="grille-2-egal" style="margin-top:16px">${structure}${lecture}</div>` + (avec.length ? evolution : "");
   const elStructure = document.getElementById("graph-structure");
   if (avec.some(l => l.structure.length)) graphique(elStructure, L => svgStructure(avec, L));
@@ -660,6 +786,7 @@ async function pageRatios() {
   if (avec.length) { courbe(); document.getElementById("epn-ratios").onchange = courbe; }
   document.querySelectorAll("tr.cliquable").forEach(tr => tr.onclick = () => ouvrirRapport(+tr.dataset.id));
   brancherPeriode(pageRatios);
+  brancherEpn(pageRatios);
 }
 
 /* ------------------------------------------------------------------ 2. analyse des rapports */
@@ -870,6 +997,8 @@ async function suivreAnalyse() {
   if ((t.rapports || []).length) A.dernier = t;
   if (etat.finAttendue) {
     etat.finAttendue = false;
+    const dernier = (t.resultats || [])[t.resultats.length - 1];
+    if (dernier && dernier.epn_cle) { choisirEpn(dernier.epn_cle); etat.periode = dernier.periode_cle; }
     await majEnvironnement();
     const echecs = (t.rapports || []).filter(r => r.etat === "erreur").length;
     if (t.erreur) toast(t.erreur, "erreur");
@@ -885,66 +1014,124 @@ function afficherResultats(t) {
         <div class="etiquettes"><span class="etiquette">Forme ${pct(r.forme)}</span><span class="etiquette">Fond ${pct(r.fond)}</span><span class="etiquette">${r.anomalies_majeures} anomalies majeures</span>
         ${statutHtml(r.retour ? "Retour au CB" : "Exploitable", r.retour ? "rouge" : "vert")}</div>
         ${(r.avertissements || []).map(a => `<div class="m" style="margin-top:4px">⚠ ${esc(a)}</div>`).join("")}</div>
-      <div class="b"><button class="bouton" data-detail="${r.id}">Voir l'analyse</button><button class="bouton primaire" data-excel="${r.id}">${icone("ouvrir")}Ouvrir l'Excel</button></div></div>`).join("")
+      <div class="b"><button class="bouton" data-detail="${r.id}">Voir l'analyse</button>${r.epn_cle ? `<button class="bouton" data-tdb="${esc(r.epn_cle)}">${icone("accueil")}Tableau de bord de l'EPN</button>` : ""}<button class="bouton primaire" data-excel="${r.id}">${icone("ouvrir")}Ouvrir l'Excel</button></div></div>`).join("")
     + (t.tableau_de_bord ? `<div style="margin-top:10px"><button class="bouton" id="tdb-excel">${icone("tableau")}Tableau de bord consolidé (Excel)</button></div>` : "");
   zone.querySelectorAll("[data-detail]").forEach(b => b.onclick = () => ouvrirRapport(+b.dataset.detail));
+  zone.querySelectorAll("[data-tdb]").forEach(b => b.onclick = () => allerEpn(b.dataset.tdb, "tableau"));
   zone.querySelectorAll("[data-excel]").forEach(b => b.onclick = () => post("/api/ouvrir", { quoi: "fichier", id: +b.dataset.excel }).catch(err => toast(err.message, "erreur")));
   const tdb = document.getElementById("tdb-excel");
   if (tdb) tdb.onclick = () => post("/api/ouvrir", { quoi: "chemin", chemin: t.tableau_de_bord }).catch(err => toast(err.message, "erreur"));
 }
 
 /* ------------------------------------------------------------------ 3. comparaison budgétaire */
+function svgSeries(points, series, L, max = 100) {
+  const H = 236, g = 46, d = 18, h = 26, b = 30, lw = L - g - d, lh = H - h - b;
+  const haut = Math.max(max, ...points.flatMap(p => series.map(s => p[s.cle] || 0)).map(v => Math.ceil(v / 20) * 20));
+  const y = v => h + lh - (v / haut) * lh, pas = lw / Math.max(points.length, 1);
+  let s = `<svg viewBox="0 0 ${L} ${H}" width="${L}" height="${H}" ${TXT} role="img">`;
+  for (let i = 0; i <= 4; i++) {
+    const v = haut * i / 4;
+    s += `<line x1="${g}" x2="${L - d}" y1="${y(v)}" y2="${y(v)}" stroke="#e8edf3"/><text x="${g - 7}" y="${y(v) + 4}" text-anchor="end" font-size="11.5" fill="#56657a">${nf0.format(v)} %</text>`;
+  }
+  points.forEach((p, i) => { s += `<text x="${g + pas * (i + 0.5)}" y="${H - 9}" text-anchor="middle" font-size="12.5" fill="#0f1e36">${esc(p.periode)}</text>`; });
+  const etiquettes = [];
+  series.forEach(se => {
+    const pts = points.map((p, i) => p[se.cle] == null ? null : [g + pas * (i + 0.5), y(p[se.cle]), p[se.cle], i]).filter(Boolean);
+    if (pts.length > 1) s += `<polyline points="${pts.map(q => q[0] + "," + q[1]).join(" ")}" fill="none" stroke="${se.couleur}" stroke-width="2.5" stroke-linejoin="round"/>`;
+    pts.forEach(([x, yy, v, i]) => {
+      s += `<circle cx="${x}" cy="${yy}" r="4.5" fill="#fff" stroke="${se.couleur}" stroke-width="2.5"><title>${esc(se.libelle)} : ${pct(v)}</title></circle>`;
+      etiquettes.push({ i, x, yy, v, couleur: se.couleur });
+    });
+  });
+  // Étiquettes au-dessus des points ; deux valeurs proches au même trimestre : la plus basse passe sous son point
+  // (ou les deux s'empilent au-dessus quand la place manque sous le point).
+  points.forEach((_, i) => {
+    const ici = etiquettes.filter(e => e.i === i).sort((a, c) => a.yy - c.yy);
+    ici.forEach((e, k) => {
+      let ty = e.yy - 10;
+      const prec = ici[k - 1];
+      if (prec && e.yy - prec.yy < 17) ty = e.yy + 19 <= h + lh - 3 ? e.yy + 19 : prec.ty - 14;
+      e.ty = ty;
+      s += `<text x="${e.x}" y="${ty}" text-anchor="middle" font-size="11.5" font-weight="700" fill="${e.couleur}" paint-order="stroke" stroke="#fff" stroke-width="3">${nf0.format(e.v)} %</text>`;
+    });
+  });
+  return s + "</svg>";
+}
 async function pageComparaison() {
-  const d = await api("/api/comparaison" + (etat.periode ? "?periode=" + encodeURIComponent(etat.periode) : ""));
+  const d = await api("/api/comparaison" + requete({ epn: etat.epn || (etat.comparaisonTous ? "tous" : ""), annee: etat.annee }));
   if (d.vide) {
-    contenu().innerHTML = entete("Comparaison budgétaire", "Prévisions et réalisations par EPN") + videHtml("comparaison", "Aucune donnée", "Analysez d'abord des rapports.", BOUTON_ANALYSER);
+    contenu().innerHTML = entete("Comparaison budgétaire", "Les rapports trimestriels d'un EPN, côte à côte") + videHtml("comparaison", "Aucune donnée", "Analysez d'abord des rapports.", BOUTON_ANALYSER);
     return;
   }
-  etat.periode = d.periode.cle;
-  const u = d.unite;
-  const lignes = d.lignes.map(l => {
-    const tr = l.recettes_prevues && l.recettes_realisees != null ? l.recettes_realisees / l.recettes_prevues * 100 : null;
-    return `<tr><td class="texte"><b>${esc(l.court)}</b><div style="color:#6b778a;font-size:12px">${esc(l.source)}</div></td>
-      <td>${montant(l.recettes_prevues, u, false)}</td><td>${montant(l.recettes_realisees, u, false)}</td><td>${pct(tr)}</td>
-      <td>${montant(l.credits, u, false)}</td><td>${montant(l.engagements, u, false)}</td><td>${montant(l.execution, u, false)}</td>
-      <td class="${l.statut === "OK" ? "taux-ok" : "taux-ko"}">${pct(l.taux)}</td><td class="centre">${statutHtml(l.statut, l.couleur)}</td></tr>`;
-  }).join("");
-  const options = d.lignes.map((l, i) => `<option value="${i}">${esc(l.epn)}</option>`).join("");
-  contenu().innerHTML = entete("Comparaison budgétaire", "Prévisions et réalisations, en recettes et en dépenses", choixPeriode(d.periodes, d.periode.cle))
-    + `<div class="panneau"><h2>${icone("tableau")}Exécution par EPN <span class="droite aide" style="margin:0">montants en ${esc(u.libelle)}</span></h2>
-      <div class="defilant"><table class="donnees"><thead><tr><th rowspan="2">EPN</th><th colspan="3">Recettes</th><th colspan="4">Dépenses</th><th rowspan="2">Statut</th></tr>
-      <tr><th>Prévues</th><th>Réalisées</th><th>Taux</th><th>Crédits</th><th>Engagements</th><th>Ordonnancements</th><th>Taux</th></tr></thead><tbody>${lignes}</tbody></table></div></div>
-    <div class="grille-2-egal" style="margin-top:16px">
-      <div class="panneau"><h2>${icone("histogramme")}Prévu et réalisé par nature de dépense</h2>
-        <div class="champ" style="margin-bottom:10px"><select id="epn-nature">${options}</select></div>
-        <div class="legende" style="justify-content:flex-end"><span><i style="background:#1565d8"></i>Prévu</span><span><i style="background:#f59e0b"></i>Réalisé</span></div>
-        <div class="graphique" id="graph-nature"></div></div>
-      <div class="panneau"><h2>${icone("courbe")}Évolution du taux d'exécution</h2>
-        <div class="champ" style="margin-bottom:10px"><select id="epn-evolution">${options}</select></div>
-        <div class="graphique" id="graph-evolution"></div></div></div>`;
-  const nature = () => {
-    const l = d.lignes[+document.getElementById("epn-nature").value];
-    const donnees = Object.values(l.natures || {}).filter(n => n.prevu != null || n.realise != null);
-    const el = document.getElementById("graph-nature");
-    if (donnees.length) graphique(el, L => svgGroupes(donnees, u, L));
-    else { DESSINS.delete(el); el.innerHTML = `<p class="aide">Répartition par nature non disponible pour cet EPN.</p>`; }
+  etat.annee = d.annee;
+  const u = d.unite, cols = d.colonnes, presents = cols.filter(c => c.present);
+  const choixEpn = choixEpnHtml(d.epns, d.epn === "tous" ? "" : d.epn, "tous").replace('<option value="tous">', `<option value="tous" ${d.epn === "tous" ? "selected" : ""}>`);
+  const choixAnnee = `<div class="choix-periode choix-annee">${icone("calendrier")}<label for="annee">Exercice :</label><select id="annee">${d.annees.map(a => `<option value="${a}" ${a === d.annee ? "selected" : ""}>${a}</option>`).join("")}</select></div>`;
+  const val = (c, f) => c.present ? f(c) : '<span class="nc">—</span>';
+  const ligne = (lib, f, aide = "") => `<tr><td class="texte">${lib}${aide ? `<div class="sous-ligne">${aide}</div>` : ""}</td>${cols.map(c => `<td>${val(c, f)}</td>`).join("")}</tr>`;
+  const section = titre => `<tr class="categorie"><td class="texte" colspan="${cols.length + 1}">${titre}</td></tr>`;
+  const mt = v => v == null ? '<span class="nc">—</span>' : montant(v, u, false);
+  const basePeriode = c => c.base_periode != null && c.base_periode < c.nb ? `<div class="sous-ligne">sur ${accord(c.base_periode, "EPN suivi", "EPN suivis")} au trimestre précédent</div>` : "";
+  const taux = (v, attendu) => v == null ? '<span class="nc">—</span>' : `${pct(v)}${attendu != null ? `<div class="sous-ligne">attendu ${nf0.format(attendu)} %</div>` : ""}`;
+  const categories = [["personnel", "Personnel"], ["biens_services", "Biens et services"], ["transferts", "Transferts"], ["investissement", "Investissements"]]
+    .filter(([cle]) => presents.some(c => c.categories[cle]));
+  const tableau = `<div class="panneau"><h2>${icone("tableau")}Rapports de l'exercice ${d.annee}, trimestre par trimestre<span class="droite aide" style="margin:0">montants en ${esc(u.libelle)}</span></h2>
+    <div class="defilant"><table class="donnees comparaison-table"><thead><tr><th>Indicateur</th>${cols.map(c => `<th ${c.present && c.ids.length === 1 ? `class="cliquable-th" data-id="${c.ids[0]}" title="Voir l'analyse du rapport"` : ""}>${esc(c.code === "A" ? "Annuel" : c.code)}<small>${c.present ? (c.nb > 1 ? accord(c.nb, "rapport", "rapports") : "analysé") : c.a_venir ? `à venir${c.echeance ? " · " + dateFr(c.echeance).slice(0, 5) : ""}` : "non analysé"}</small></th>`).join("")}</tr></thead><tbody>
+      ${section("Crédits et exécution des dépenses")}
+      ${ligne("Crédits (budget actuel)", c => mt(c.credits))}
+      ${ligne("Engagements", c => mt(c.engagements))}
+      ${ligne("Ordonnancements (cumul)", c => mt(c.execution))}
+      ${ligne("dont exécutés au cours de la période", c => mt(c.execution_periode) + basePeriode(c), "écart avec le rapport précédent")}
+      ${ligne("Taux d'exécution", c => taux(c.taux, c.attendu))}
+      ${ligne("Statut", c => statutHtml(c.statut, c.couleur))}
+      ${section("Recettes")}
+      ${ligne("Prévisions", c => mt(c.recettes_prevues))}
+      ${ligne("Recouvrements (cumul)", c => mt(c.recettes_realisees))}
+      ${ligne("dont recouvrés au cours de la période", c => mt(c.recettes_periode) + basePeriode(c))}
+      ${ligne("Taux de recouvrement", c => taux(c.taux_recouvrement))}
+      ${categories.length ? section("Dépenses par catégorie (ordonnancements)") : ""}
+      ${categories.map(([cle, lib]) => ligne(lib, c => c.categories[cle] ? `${mt(c.categories[cle].realise)}<div class="sous-ligne">${c.categories[cle].taux == null ? "—" : nf0.format(c.categories[cle].taux) + " % des crédits"}</div>` : '<span class="nc">—</span>')).join("")}
+      ${section("Ratios de gestion")}
+      ${[["RRP", "Ressources propres"], ["RDP", "Personnel"], ["RDF", "Fonctionnement"], ["RDI", "Investissement"]].map(([code, lib]) => ligne(`${code} – ${lib}`, c => c.ratios[code] == null ? '<span class="nc">—</span>' : pct(c.ratios[code]))).join("")}
+      ${section("Qualité du rapport")}
+      ${ligne("Conformité de forme", c => pct(c.forme))}
+      ${ligne("Fiabilité du fond", c => pct(c.fond))}
+      ${ligne("Anomalies majeures", c => nf0.format(c.anomalies_majeures))}
+      ${ligne("Délai de transmission", c => c.ecart_jours == null ? '<span class="nc">non renseigné</span>' : c.ecart_jours > 0 ? statutHtml(`+${c.ecart_jours} j`, "rouge") : statutHtml("Dans les délais", "vert"))}
+      ${ligne("Suite à donner", c => c.retours ? statutHtml(c.nb > 1 ? `${c.retours} retour${c.retours > 1 ? "s" : ""} au CB` : "Retour au CB", "rouge") : statutHtml("Exploitable", "vert"))}
+      ${ligne("Source des montants", c => `<span class="sous-ligne">${esc(c.sources.join(" ; ") || "—")}</span>`)}
+    </tbody></table></div></div>`;
+  const graphes = presents.length ? `<div class="grille-2-egal" style="margin-top:16px">
+      <div class="panneau"><h2>${icone("histogramme")}Crédits et ordonnancements</h2><div class="legende" style="justify-content:flex-end"><span><i style="background:#1565d8"></i>Crédits</span><span><i style="background:#f59e0b"></i>Ordonnancements</span></div><div class="graphique" id="g-depenses"></div></div>
+      <div class="panneau"><h2>${icone("base")}Recettes prévues et recouvrées</h2><div class="legende" style="justify-content:flex-end"><span><i style="background:#1565d8"></i>Prévisions</span><span><i style="background:#f59e0b"></i>Recouvrements</span></div><div class="graphique" id="g-recettes"></div></div>
+      <div class="panneau"><h2>${icone("courbe")}Taux d'exécution et de recouvrement</h2><div class="legende" style="justify-content:flex-end"><span><i class="rond" style="background:#1565d8"></i>Exécution des dépenses</span><span><i class="rond" style="background:#1f9d4c"></i>Recouvrement des recettes</span></div><div class="graphique" id="g-taux"></div></div>
+      <div class="panneau"><h2>${icone("rapports")}Qualité des rapports</h2><div class="legende" style="justify-content:flex-end"><span><i class="rond" style="background:#9b59b6"></i>Forme</span><span><i class="rond" style="background:#f59e0b"></i>Fond</span></div><div class="graphique" id="g-qualite"></div></div></div>` : "";
+  const sujet = d.epn === "tous" ? "Ensemble des EPN, trimestre par trimestre" : `${esc(d.fiche ? d.fiche.epn : "")} · les rapports de l'exercice côte à côte`;
+  contenu().innerHTML = entete(d.epn === "tous" ? "Comparaison budgétaire" : `Comparaison budgétaire <span class="titre-epn">${esc(d.fiche ? d.fiche.court : "")}</span>`, sujet, choixEpn + choixAnnee)
+    + `<div class="panneau lecture-comparaison"><div class="lecture"><p>${insecable(d.lecture)}</p></div></div>` + tableau + graphes;
+  if (presents.length) {
+    const trims = presents.map(c => ({ libelle: c.code === "A" ? "Annuel" : c.code, prevu: c.credits, realise: c.execution }));
+    graphique(document.getElementById("g-depenses"), L => svgGroupes(trims, u, L));
+    graphique(document.getElementById("g-recettes"), L => svgGroupes(presents.map(c => ({ libelle: c.code === "A" ? "Annuel" : c.code, prevu: c.recettes_prevues, realise: c.recettes_realisees })), u, L));
+    graphique(document.getElementById("g-taux"), L => svgSeries(presents.map(c => ({ periode: c.code === "A" ? "Annuel" : c.code, exe: c.taux, rec: c.taux_recouvrement })),
+      [{ cle: "exe", libelle: "Exécution", couleur: "#1565d8" }, { cle: "rec", libelle: "Recouvrement", couleur: "#1f9d4c" }], L));
+    graphique(document.getElementById("g-qualite"), L => svgSeries(presents.map(c => ({ periode: c.code === "A" ? "Annuel" : c.code, forme: c.forme, fond: c.fond })),
+      [{ cle: "forme", libelle: "Forme", couleur: "#9b59b6" }, { cle: "fond", libelle: "Fond", couleur: "#f59e0b" }], L));
+  }
+  document.querySelectorAll(".cliquable-th").forEach(th => th.onclick = () => ouvrirRapport(+th.dataset.id));
+  const sel = document.getElementById("epn");
+  if (sel) sel.onchange = () => {
+    etat.comparaisonTous = sel.value === "tous";
+    choisirEpn(sel.value === "tous" ? "" : sel.value);
+    etat.annee = null;
+    pageComparaison();
   };
-  const evolution = () => {
-    const l = d.lignes[+document.getElementById("epn-evolution").value];
-    const pts = d.historiques[l.epn] || [];
-    const el = document.getElementById("graph-evolution");
-    if (pts.length) graphique(el, L => svgCourbe(pts, L));
-    else { DESSINS.delete(el); el.innerHTML = `<p class="aide">Aucune autre période analysée.</p>`; }
-  };
-  if (d.lignes.length) { nature(); evolution(); }
-  document.getElementById("epn-nature").onchange = nature;
-  document.getElementById("epn-evolution").onchange = evolution;
-  brancherPeriode(pageComparaison);
+  document.getElementById("annee").onchange = e => { etat.annee = +e.target.value; pageComparaison(); };
 }
 
 /* ------------------------------------------------------------------ 4. alertes & anomalies */
 async function pageAlertes() {
-  const d = await api("/api/alertes" + (etat.periode ? "?periode=" + encodeURIComponent(etat.periode) : ""));
+  const d = await api("/api/alertes" + requete({ periode: etat.periode, epn: etat.epn }));
   if (d.vide) {
     contenu().innerHTML = entete("Alertes & Anomalies", "Points d'attention issus des analyses") + videHtml("alerte", "Aucune alerte", "Aucune analyse n'a encore été réalisée.", BOUTON_ANALYSER);
     return;
@@ -961,24 +1148,25 @@ async function pageAlertes() {
         <div class="epn">${esc(a.epn || "")}</div><div>${esc(a.detail || "")}${a.valeur != null ? ` (${signe(a.valeur, montant(Math.abs(a.valeur), d.unite))})` : ""}</div></div>
         ${a.id ? `<button class="bouton" data-id="${a.id}">Voir le rapport</button>` : ""}</div>`).join("")}</div></div>`;
   };
-  contenu().innerHTML = entete("Alertes & Anomalies", "Points d'attention issus des analyses de la période", choixPeriode(d.periodes, d.periode.cle))
+  contenu().innerHTML = entete("Alertes & Anomalies", d.epn ? `Points d'attention de l'EPN pour la période` : "Points d'attention issus des analyses de la période", choixEpnHtml(d.epns, etat.epn) + choixPeriode(d.periodes, d.periode.cle))
     + `<div class="compteurs">${carteKpi("exclamation", "fond-rouge", "Critiques", n("critique"), "")}${carteKpi("alerte", "fond-orange", "À traiter", n("attention"), "")}${carteKpi("info", "fond-bleu", "Pour information", n("info"), "")}</div>`
     + (d.alertes.length ? `<div class="pile">${groupe("critique", "Alertes critiques")}${groupe("attention", "Points à traiter")}${groupe("info", "Pour information")}</div>`
       : videHtml("coche", "Aucune alerte pour cette période", "Les rapports analysés n'appellent pas d'observation particulière."));
   document.querySelectorAll("[data-id]").forEach(b => b.onclick = () => ouvrirRapport(+b.dataset.id));
   brancherPeriode(pageAlertes);
+  brancherEpn(pageAlertes);
 }
 
-/* ------------------------------------------------------------------ 5. rapports détaillés */
+/* ------------------------------------------------------------------ 5. toutes les analyses (liste) */
 async function pageRapports() {
   const d = await api("/api/rapports");
   if (!d.rapports.length) {
-    contenu().innerHTML = entete("Rapports détaillés", "Historique des analyses") + videHtml("rapports", "Aucun rapport analysé", "Les analyses réalisées apparaîtront ici.", BOUTON_ANALYSER);
+    contenu().innerHTML = entete("Analyses par EPN", "Toutes les analyses") + videHtml("rapports", "Aucun rapport analysé", "Les analyses réalisées apparaîtront ici.", BOUTON_ANALYSER);
     return;
   }
   const opts = [`<option value="">Toutes les périodes</option>`].concat(d.periodes.map(p => `<option value="${p.cle}">${esc(p.libelle)}</option>`)).join("");
-  contenu().innerHTML = entete("Rapports détaillés", "Historique des analyses : cliquez sur un rapport pour lire son analyse",
-    `<div class="choix-periode">${icone("calendrier")}<select id="filtre-periode">${opts}</select></div><div class="choix-periode"><input id="recherche" placeholder="Rechercher un EPN, un CB…" style="border:0;outline:0;min-width:220px"></div>`)
+  contenu().innerHTML = entete("Analyses par EPN", "Toutes les analyses, de la plus récente à la plus ancienne : cliquez sur une ligne pour lire l'analyse",
+    `<div class="onglets compact"><button type="button" id="vers-epn">Par EPN</button><button class="actif" type="button">Toutes les analyses</button></div><div class="choix-periode">${icone("calendrier")}<select id="filtre-periode">${opts}</select></div><div class="choix-periode"><input id="recherche" placeholder="Rechercher un EPN, un CB…" style="border:0;outline:0;min-width:220px"></div>`)
     + `<div class="panneau"><div class="defilant"><table class="donnees" id="table-rapports"><thead><tr><th>EPN</th><th>Période</th><th>Contrôleur Budgétaire</th><th>Date limite</th><th>Réception</th><th>Délai</th><th>Forme</th><th>Fond</th><th>Anomalies majeures</th><th>Suite</th><th>Analysé le</th></tr></thead><tbody></tbody></table></div></div>`;
   const remplir = () => {
     const per = document.getElementById("filtre-periode").value, q = document.getElementById("recherche").value.toLowerCase();
@@ -994,6 +1182,7 @@ async function pageRapports() {
   };
   document.getElementById("filtre-periode").onchange = remplir;
   document.getElementById("recherche").oninput = remplir;
+  document.getElementById("vers-epn").onclick = () => location.replace("#/epn");
   remplir();
 }
 
@@ -1009,11 +1198,12 @@ async function ouvrirRapport(id) {
   t.innerHTML = `<button class="fermer" title="Fermer" aria-label="Fermer">×</button>
     <h2>${esc(r.epn)}</h2><div class="meta">${esc(r.periode)} · CB : ${esc(r.controleur || "non identifié")} · analysé le ${dateFr(r.date_analyse)}</div>
     <div class="etiquettes" style="margin-bottom:14px"><span class="etiquette">Forme ${pct(r.score_forme)} (${esc((D.mention_forme || "").toLowerCase())})</span>
-      <span class="etiquette">Fond ${pct(r.score_fond)}</span><span class="etiquette">${r.anomalies_majeures} anomalies majeures</span><span class="etiquette">${esc(D.delai || "")}</span>
+      <span class="etiquette">Fond ${pct(r.score_fond)}</span><span class="etiquette">${r.anomalies_majeures} anomalies majeures</span>${D.delai ? `<span class="etiquette">${esc(D.delai)}</span>` : ""}
       ${statutHtml(r.retour ? "Retour au CB" : "Exploitable", r.retour ? "rouge" : "vert")}</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
       <button class="bouton primaire" id="t-excel" ${r.fichier_existe ? "" : "disabled"}>${icone("ouvrir")}Ouvrir le fichier d'analyse</button>
       <button class="bouton" id="t-dossier" ${r.fichier_existe ? "" : "disabled"}>${icone("dossier")}Dossier</button>
+      <button class="bouton" id="t-epn">${icone("accueil")}Fiche de l'EPN</button>
       <button class="bouton danger" id="t-supprimer">${icone("corbeille")}Retirer de l'historique</button></div>
     <div class="panneau"><h2>Appréciation générale</h2><div class="prose">${paragraphes || "<p>—</p>"}</div>
       <p style="margin:6px 0 0"><b>${insecable(D.suite || "")}</b></p></div>
@@ -1048,12 +1238,8 @@ async function ouvrirRapport(id) {
   document.getElementById("t-excel").onclick = () => post("/api/ouvrir", { quoi: "fichier", id }).catch(err => toast(err.message, "erreur"));
   document.getElementById("t-dossier").onclick = () => post("/api/ouvrir", { quoi: "dossier", id }).catch(err => toast(err.message, "erreur"));
   const lienNatures = document.getElementById("t-natures");
-  if (lienNatures) lienNatures.onclick = () => {
-    etat.natureChoix = String(id);
-    etat.periode = r.periode_cle;
-    fermerTiroir();
-    if (location.hash === "#/natures") pageNatures(); else location.replace("#/natures");
-  };
+  if (lienNatures) lienNatures.onclick = () => allerEpn(r.epn_cle, "natures", r.periode_cle);
+  document.getElementById("t-epn").onclick = () => { fermerTiroir(); location.replace("#/epn/" + encodeURIComponent(r.epn_cle)); };
   document.getElementById("t-supprimer").onclick = async () => {
     if (!confirm("Retirer cette analyse de l'historique ? Le fichier Excel n'est pas supprimé.")) return;
     await post("/api/supprimer", { id });
@@ -1113,7 +1299,10 @@ function pageAide() {
       <li><b>Déposez les rapports</b> des Contrôleurs Budgétaires (Word ou PDF, y compris scannés) dans « Analyse des rapports », puis indiquez leur date de réception à la DCB.</li>
       <li><b>Ajoutez, si vous les avez, les décrets de création</b> des EPN et les <b>situations d'exécution</b> (états SIGOBE recettes et annexe des dépenses, Excel, CSV ou PDF).</li>
       <li><b>Lancez l'analyse.</b> Chaque rapport donne un fichier Excel d'analyse (grille de la DCB rédigée) et alimente le tableau de bord.</li>
-      <li><b>Consultez</b> le tableau de bord, les alertes et le détail de chaque rapport ; ouvrez le fichier Excel pour le transmettre.</li></ol></div>
+      <li><b>Consultez</b> le tableau de bord, les alertes et le détail de chaque rapport ; ouvrez le fichier Excel pour le transmettre.</li></ol>
+      <h2 style="margin-top:14px">${icone("dossier")}Suivre un EPN</h2>
+      <p class="aide" style="margin:0 0 8px">Le choix <b>EPN</b>, en haut des pages, vaut pour le tableau de bord, la comparaison, les ratios, la nature économique et les alertes ; il est mémorisé sur ce poste. Après une analyse, l'application se place sur l'EPN analysé. « Ensemble des EPN » revient à la vue consolidée.</p>
+      <p class="aide" style="margin:0">La rubrique <b>Analyses par EPN</b> conserve les analyses effectuées, rangées par EPN et par exercice (T1 à T4, rapport annuel) ; chaque nouvelle analyse est enregistrée dans un dossier propre à l'EPN (fichier d'analyse et copie du rapport, un sous-dossier par période). La <b>Comparaison budgétaire</b> met côte à côte les rapports trimestriels de l'EPN pour un exercice.</p></div>
       <div class="panneau"><h2>${icone("aide")}Questions fréquentes</h2>
       <p><b>D'où viennent les montants du tableau de bord ?</b><br>De la situation d'exécution (SIGOBE) lorsqu'elle est fournie, sinon des tableaux du rapport. La source est indiquée sous le détail par EPN.</p>
       <p><b>Quelles sont les dates limites de transmission ?</b><br>${esc(resumeDelais())} Un rapport reçu après sa date limite est signalé « hors délai » (alerte, appréciation générale, fichier d'analyse). Ces dates se modifient dans les Paramètres.</p>
@@ -1138,6 +1327,7 @@ document.addEventListener("keydown", e => { if (e.key === "Escape") fermerTiroir
 document.getElementById("voile").onclick = fermerTiroir;
 window.addEventListener("hashchange", router);
 construireNav();
+etat.epn = lireEpn();
 presence();
 setInterval(presence, 15000);
 majEnvironnement().then(router);

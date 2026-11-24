@@ -630,7 +630,7 @@ def exporter_tableau_de_bord(donnees: dict, sortie: str | Path) -> Path:
     ws = wb.active
     ws.title = "Tableau de bord"
     p, k = donnees["periode"], donnees["kpi"]
-    ws["A1"] = f"Tableau de bord – {p['libelle']}"
+    ws["A1"] = f"Tableau de bord – {donnees['epn']['epn'] + ' – ' if donnees.get('epn') else ''}{p['libelle']}"
     ws["A1"].font = Font(bold=True, size=14, color="1F4E78")
     ws["A2"] = f"Montants en FCFA ; {donnees['rapports']['total']} rapport(s) analysé(s)."
     ws["A2"].font = POLICE_AUTO
@@ -662,7 +662,8 @@ def exporter_tableau_de_bord(donnees: dict, sortie: str | Path) -> Path:
     from .ratios import RATIOS
     if "ratios_detail" not in donnees:
         from .tableau import analyse_ratios
-        donnees = {**donnees, "ratios_detail": analyse_ratios(donnees["periode"]["cle"])["lignes"]}
+        donnees = {**donnees, "ratios_detail": analyse_ratios(donnees["periode"]["cle"],
+                                                              (donnees.get("epn") or {}).get("cle"))["lignes"]}
     _entetes(ws3, 1, ["EPN", "Source", "Base des dépenses"] + [f"{c} – {court} (%)" for c, court, *_ in RATIOS]
              + ["Ratios cités par le CB"], [40, 26, 22] + [16] * len(RATIOS) + [60])
     j = 1
@@ -692,7 +693,7 @@ def exporter_tableau_de_bord(donnees: dict, sortie: str | Path) -> Path:
     from .historique import lister as lister_analyses
     from .analyse import charger_parametres
     j = 1
-    for rec in lister_analyses(donnees["periode"]["cle"]):
+    for rec in lister_analyses(donnees["periode"]["cle"], epn=(donnees.get("epn") or {}).get("cle")):
         nat = rec["donnees"].get("natures") or {}
         if not (nat.get("depenses") or nat.get("recettes")):
             continue

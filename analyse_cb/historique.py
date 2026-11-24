@@ -195,7 +195,8 @@ def constats_principaux(res, n: int = 12) -> list[dict]:
     return [{"gravite": c.gravite, "texte": phrase_constat(c, systeme)} for c in cs[:n]]
 
 
-def enregistrer(res, fichier_analyse: str | Path, con: sqlite3.Connection | None = None) -> int:
+def enregistrer(res, fichier_analyse: str | Path, con: sqlite3.Connection | None = None,
+                extra: dict | None = None) -> int:
     """Enregistre (ou remplace) l'analyse d'un rapport ; renvoie son identifiant."""
     from .commentaires import aerer
     from .excel import suite_a_donner
@@ -226,6 +227,7 @@ def enregistrer(res, fichier_analyse: str | Path, con: sqlite3.Connection | None
         "mention_fond": res.mention(res.score_fond),
         "avertissements": list(res.doc.avertissements),
         "ocr": bool(res.doc.ocr),
+        **(extra or {}),
     }
     valeurs = dict(
         cle=f"{cle_epn}|{pcle}", date_analyse=datetime.now().isoformat(timespec="seconds"), rapport=res.doc.chemin.name,
@@ -254,7 +256,24 @@ def _ligne(row: sqlite3.Row) -> dict:
     return d
 
 
-def lister(periode_cle: str | None = None, con: sqlite3.Connection | None = None) -> list[dict]:
+def cle_epn_res(res) -> str:
+    """Identifiant stable de l'EPN d'une analyse (sigle, à défaut dénomination, normalisés)."""
+    return normaliser(_sigle(res) or res.infos.epn)
+
+
+def epn_du(record: dict) -> str:
+    """Identifiant de l'EPN d'une analyse enregistrée (première partie de la clé « epn|période »)."""
+    return (record.get("cle") or "").split("|")[0]
+
+
+def nom_dossier_epn(res) -> str:
+    """Nom du dossier de l'EPN dans le dossier des résultats (sigle, à défaut dénomination)."""
+    nom = _sigle(res) or res.infos.epn or "EPN non identifié"
+    nom = re.sub(r"\s+", " ", re.sub(r'[\\/:*?"<>|]+', " ", nom)).strip(" .")
+    return nom[:60].strip() or "EPN"
+
+
+def lister(periode_cle: str | None = None, con: sqlite3.Connection | None = None, epn: str | None = None) -> list[dict]:
     fermer = con is None
     con = con or connexion()
     if periode_cle:
@@ -262,9 +281,56 @@ def lister(periode_cle: str | None = None, con: sqlite3.Connection | None = None
     else:
         rows = con.execute("SELECT * FROM analyses ORDER BY annee DESC, rang DESC, epn").fetchall()
     out = [_ligne(r) for r in rows]
+    if epn:
+        out = [r for r in out if epn_du(r) == epn]
     if fermer:
         con.close()
     return out
+
+
+def epns() -> list[dict]:
+    """EPN de l'historique, avec leurs analyses (de la plus récente à la plus ancienne période)."""
+    groupes: dict[str, list[dict]] = {}
+    for r in lister():
+        groupes.setdefault(epn_du(r), []).append(r)
+    out = []
+    for cle, recs in groupes.items():
+        d = recs[0]
+        out.append({"cle": cle, "epn": d["epn"], "sigle": d["sigle"], "tutelle": d["tutelle"], "controleur": d["controleur"],
+                    "court": d["sigle"] or (d["epn"] if len(d["epn"]) <= 28 else d["epn"][:26] + "…"),
+                    "nb": len(recs), "annees": sorted({r["annee"] for r in recs}, reverse=True),
+                    "periodes": [{"id": r["id"], "cle": r["periode_cle"], "court": libelle_periode(r["periode_cle"], True),
+                                  "annee": r["annee"], "rang": r["rang"], "retour": bool(r["retour"]),
+                                  "forme": r["score_forme"], "fond": r["score_fond"]} for r in recs],
+                    "derniere": {"id": d["id"], "periode": libelle_periode(d["periode_cle"], True),
+                                 "date_analyse": d["date_analyse"], "forme": d["score_forme"], "fond": d["score_fond"],
+                                 "retour": bool(d["retour"]), "anomalies_majeures": d["anomalies_majeures"]}})
+    return sorted(out, key=lambda e: e["court"].lower())
+
+
+def fiche_epn(cle: str) -> dict | None:
+    """Analyses d'un EPN, par exercice et par période, avec les fichiers conservés."""
+    recs = lister(epn=cle)
+    if not recs:
+        return None
+    d = recs[0]
+    analyses = []
+    for r in recs:
+        dn = r["donnees"]
+        copie = dn.get("copie_rapport") or ""
+        analyses.append({
+            "id": r["id"], "periode_cle": r["periode_cle"], "periode": libelle_periode(r["periode_cle"]),
+            "court": libelle_periode(r["periode_cle"], True), "annee": r["annee"], "rang": r["rang"],
+            "controleur": r["controleur"], "charge": r["charge"], "rapport": r["rapport"],
+            "date_reception": r["date_reception"], "date_limite": r["date_limite"], "ecart_jours": r["ecart_jours"],
+            "score_forme": r["score_forme"], "score_fond": r["score_fond"], "anomalies_majeures": r["anomalies_majeures"],
+            "retour": bool(r["retour"]), "date_analyse": r["date_analyse"], "source": (dn.get("montants") or {}).get("source", ""),
+            "fichier_existe": Path(r["fichier_analyse"]).exists(), "rapport_conserve": bool(copie) and Path(copie).exists()})
+    dossier = next((r["donnees"].get("dossier_epn") for r in recs if r["donnees"].get("dossier_epn")), "")
+    return {"cle": cle, "epn": d["epn"], "sigle": d["sigle"], "tutelle": d["tutelle"],
+            "controleurs": sorted({r["controleur"] for r in recs if r["controleur"]}),
+            "annees": sorted({r["annee"] for r in recs}, reverse=True), "analyses": analyses,
+            "dossier": dossier, "dossier_existe": bool(dossier) and Path(dossier).is_dir()}
 
 
 def obtenir(ident: int, con: sqlite3.Connection | None = None) -> dict | None:
@@ -285,16 +351,20 @@ def supprimer(ident: int, con: sqlite3.Connection | None = None) -> None:
         con.close()
 
 
-def periodes(con: sqlite3.Connection | None = None) -> list[dict]:
+def periodes(con: sqlite3.Connection | None = None, epn: str | None = None) -> list[dict]:
+    """Périodes analysées (de la plus récente à la plus ancienne), éventuellement pour un seul EPN."""
     fermer = con is None
     con = con or connexion()
-    rows = con.execute("SELECT periode_cle, annee, rang, COUNT(*) AS n FROM analyses "
-                       "GROUP BY periode_cle ORDER BY annee DESC, rang DESC").fetchall()
+    rows = con.execute("SELECT periode_cle, annee, rang, cle FROM analyses").fetchall()
     if fermer:
         con.close()
-    return [{"cle": r["periode_cle"], "libelle": libelle_periode(r["periode_cle"]),
-             "court": libelle_periode(r["periode_cle"], True), "annee": r["annee"], "rang": r["rang"],
-             "rapports": r["n"]} for r in rows]
+    compte: dict[str, list] = {}
+    for r in rows:
+        if epn and r["cle"].split("|")[0] != epn:
+            continue
+        compte.setdefault(r["periode_cle"], [r["annee"], r["rang"], 0])[2] += 1
+    return [{"cle": cle, "libelle": libelle_periode(cle), "court": libelle_periode(cle, True), "annee": a, "rang": g,
+             "rapports": n} for cle, (a, g, n) in sorted(compte.items(), key=lambda x: (-x[1][0], -x[1][1]))]
 
 
 def aujourd_hui() -> str:

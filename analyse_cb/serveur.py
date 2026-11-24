@@ -286,11 +286,23 @@ class Application:
                                      periode=(r.get("periode") or None))
                 res = analyser(fichier["chemin"], infos, parametres, None, decrets=decrets, situations=situations,
                                reference_unique=n == 1)
-                sortie_xlsx = remplir_modele(res, sortie / f"Analyse_{fichier['chemin'].stem}.xlsx")
-                ident = historique.enregistrer(res, sortie_xlsx)
+                # Rangement par EPN : <dossier des résultats>/<EPN>/<période>/ (analyse et copie du rapport)
+                pcle = historique.cle_periode(res.periode)[0]
+                dossier_epn = sortie / historique.nom_dossier_epn(res)
+                dossier = dossier_epn / pcle
+                dossier.mkdir(parents=True, exist_ok=True)
+                sortie_xlsx = remplir_modele(res, dossier / f"Analyse_{fichier['chemin'].stem}.xlsx")
+                copie = dossier / fichier["nom"]
+                try:
+                    shutil.copy2(fichier["chemin"], copie)
+                except OSError:
+                    copie = None
+                ident = historique.enregistrer(res, sortie_xlsx, extra={
+                    "copie_rapport": str(copie) if copie else "", "dossier_epn": str(dossier_epn)})
                 resultats.append((res, sortie_xlsx))
                 t["resultats"].append({
                     "id": ident, "epn": res.infos.epn, "periode": res.periode.libelle,
+                    "epn_cle": historique.cle_epn_res(res), "periode_cle": pcle, "dossier": str(dossier),
                     "forme": res.score_forme, "fond": res.score_fond, "anomalies_majeures": res.nb_anomalies_majeures,
                     "date_limite": res.date_limite.isoformat(), "ecart_jours": res.ecart_jours,
                     "date_reception": res.infos.date_reception.isoformat() if res.infos.date_reception else None,
@@ -325,6 +337,23 @@ class Application:
             if not chemin.exists():
                 raise ValueError(f"Le fichier d'analyse n'existe plus : {chemin}")
             ouvrir_systeme(chemin if quoi == "fichier" else chemin.parent)
+        elif quoi == "rapport" and data.get("id"):
+            r = historique.obtenir(int(data["id"]))
+            copie = Path((r or {}).get("donnees", {}).get("copie_rapport") or "")
+            if not r or not copie.name or not copie.exists():
+                raise ValueError("Le rapport n'a pas été conservé avec cette analyse (analyse antérieure à la version 3.4).")
+            ouvrir_systeme(copie)
+        elif quoi == "dossier_epn" and data.get("cle"):
+            fiche = historique.fiche_epn(str(data["cle"]))
+            if not fiche:
+                raise ValueError("EPN introuvable.")
+            dossier = Path(fiche["dossier"]) if fiche["dossier_existe"] else None
+            if dossier is None:
+                r = historique.obtenir(fiche["analyses"][0]["id"])
+                dossier = Path(r["fichier_analyse"]).parent
+            if not dossier.exists():
+                raise ValueError(f"Le dossier n'existe plus : {dossier}")
+            ouvrir_systeme(dossier)
         elif quoi == "chemin" and data.get("chemin"):
             ouvrir_systeme(Path(data["chemin"]))
         elif quoi == "sortie":
@@ -342,13 +371,14 @@ class Application:
         else:
             raise ValueError("Demande d'ouverture invalide.")
 
-    def exporter(self, periode: str | None) -> str:
+    def exporter(self, periode: str | None, epn: str | None = None) -> str:
         from .excel import exporter_tableau_de_bord
-        donnees = tableau.tableau_de_bord(periode, parametres_effectifs())
+        donnees = tableau.tableau_de_bord(periode, parametres_effectifs(), epn)
         if donnees.get("vide"):
             raise ValueError("Aucune analyse à exporter.")
         sortie = Path(lire_preferences().get("sortie") or dossier_sortie_defaut())
-        chemin = sortie / f"Tableau_de_bord_{donnees['periode']['cle']}.xlsx"
+        nom = re.sub(r'[\\/:*?"<>|]+', " ", donnees["epn"]["court"]).strip() + "_" if donnees.get("epn") else ""
+        chemin = sortie / f"Tableau_de_bord_{nom}{donnees['periode']['cle']}.xlsx"
         exporter_tableau_de_bord(donnees, chemin)
         return str(chemin)
 
@@ -418,23 +448,30 @@ class Gestionnaire(BaseHTTPRequestHandler):
                     JOURNAL.info("Interface chargée (%s).", (self.headers.get("User-Agent") or "")[:160])
                 return self._json(self.app.etat())
             if chemin == "/api/tableau":
-                return self._json(tableau.tableau_de_bord(q.get("periode"), parametres_effectifs()))
+                return self._json(tableau.tableau_de_bord(q.get("periode"), parametres_effectifs(), q.get("epn")))
             if chemin == "/api/comparaison":
-                return self._json(tableau.comparaison(q.get("periode"), parametres_effectifs()))
+                annee = int(q["annee"]) if (q.get("annee") or "").isdigit() else None
+                return self._json(tableau.comparaison_epn(q.get("epn"), annee, parametres_effectifs()))
+            if chemin == "/api/epns":
+                return self._json({"epns": historique.epns()})
+            if chemin == "/api/epn":
+                fiche = historique.fiche_epn(q.get("cle") or "")
+                return self._json(fiche) if fiche else self._erreur("EPN introuvable.", 404)
             if chemin == "/api/natures":
                 return self._json(tableau.analyse_natures(q.get("periode"), q.get("epn"), parametres_effectifs()))
             if chemin == "/api/ratios":
-                return self._json(tableau.analyse_ratios(q.get("periode")))
+                return self._json(tableau.analyse_ratios(q.get("periode"), q.get("epn")))
             if chemin == "/api/alertes":
-                return self._json(tableau.toutes_alertes(q.get("periode"), parametres_effectifs()))
+                return self._json(tableau.toutes_alertes(q.get("periode"), parametres_effectifs(), q.get("epn")))
             if chemin == "/api/rapports":
                 lignes = []
-                for r in historique.lister(q.get("periode") or None):
+                for r in historique.lister(q.get("periode") or None, epn=q.get("epn") or None):
                     d = r["donnees"]
                     lignes.append({k: r[k] for k in ("id", "epn", "sigle", "tutelle", "periode_cle", "controleur", "charge",
                                                      "date_analyse", "date_reception", "date_limite", "ecart_jours", "score_forme",
                                                      "score_fond", "anomalies_majeures", "retour", "rapport")}
                                   | {"periode": historique.libelle_periode(r["periode_cle"], True),
+                                     "epn_cle": historique.epn_du(r),
                                      "delai": d.get("delai", ""), "alertes": len(d.get("alertes", []))})
                 return self._json({"rapports": lignes, "periodes": historique.periodes()})
             if chemin == "/api/rapport":
@@ -443,6 +480,8 @@ class Gestionnaire(BaseHTTPRequestHandler):
                     return self._erreur("Analyse introuvable.", 404)
                 r["periode"] = historique.libelle_periode(r["periode_cle"])
                 r["fichier_existe"] = Path(r["fichier_analyse"]).exists()
+                r["epn_cle"] = historique.epn_du(r)
+                r["rapport_conserve"] = bool(r["donnees"].get("copie_rapport")) and Path(r["donnees"]["copie_rapport"]).exists()
                 nat = r["donnees"].get("natures") or {}
                 if nat.get("depenses") or nat.get("recettes"):
                     from .natures import analyser as analyser_natures
@@ -495,7 +534,7 @@ class Gestionnaire(BaseHTTPRequestHandler):
                     f.unlink()
                 return self._json({"ok": True})
             if req.path == "/api/exporter":
-                chemin = self.app.exporter(data.get("periode"))
+                chemin = self.app.exporter(data.get("periode"), data.get("epn"))
                 if data.get("ouvrir", True):
                     ouvrir_systeme(Path(chemin))
                 return self._json({"chemin": chemin})

@@ -52,6 +52,7 @@ a { color: var(--bleu); }
 .nav a:hover { background: rgba(255,255,255,.07); }
 .nav a.actif { background: var(--bleu); color: #fff; font-weight: 600; }
 .nav svg { width: 20px; height: 20px; flex: 0 0 20px; }
+.nav .badge[hidden] { display: none; }
 .nav .badge { margin-left: auto; background: var(--rouge); color: #fff; font-size: 11px; font-weight: 700;
   min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; display: grid; place-items: center; }
 .bas-barre { padding: 12px 10px 14px; }
@@ -324,3 +325,45 @@ span.cite { margin-left: 4px; }
 .donnees tr.categorie td { background: #f3f6fb; font-weight: 700; }
 .donnees td.code { font-variant-numeric: tabular-nums; color: var(--encre-2); }
 .donnees tr.nature.supprimee td { color: var(--gris); }
+
+/* ----------------------------------------------------------- EPN suivi : tableau de bord, analyses par EPN, comparaison */
+.choix-epn select { min-width: 220px; max-width: 330px; }
+.titre-epn { display: inline-block; background: var(--bleu-clair); color: var(--bleu); border-radius: 8px; padding: 0 10px;
+  font-size: 22px; vertical-align: 3px; margin-left: 4px; }
+.entete h1 a.fil { color: var(--bleu); text-decoration: none; font-weight: 600; font-size: 20px; }
+.entete h1 a.fil:hover { text-decoration: underline; }
+.fil-sep { color: var(--gris); font-weight: 400; margin: 0 4px; }
+.bouton.petit { padding: 4px 10px; font-size: 12.5px; gap: 5px; border-radius: 6px; }
+.actions-ligne { display: flex; gap: 6px; justify-content: center; }
+.table-fiche td.texte { min-width: 230px; }
+.annee-frise { font-size: 12px; font-weight: 700; color: var(--encre-2); align-self: center; margin-right: 2px; }
+.entete .sous a.lien-fiche { display: inline-flex; align-items: center; gap: 5px; color: var(--bleu); font-weight: 600; text-decoration: none; }
+.entete .sous a.lien-fiche:hover { text-decoration: underline; }
+.entete .sous a.lien-fiche svg { width: 16px; height: 16px; }
+.choix-annee select { min-width: 110px; }
+.grille-epn { display: grid; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); gap: 16px; }
+.carte-epn { background: var(--carte); border: 1px solid var(--trait); border-radius: var(--rayon); box-shadow: var(--ombre);
+  padding: 16px 18px; cursor: pointer; display: flex; flex-direction: column; gap: 6px; transition: border-color .15s, box-shadow .15s; }
+.carte-epn:hover, .carte-epn:focus-visible { border-color: var(--bleu); box-shadow: 0 2px 4px rgba(16,40,74,.08), 0 6px 18px rgba(21,101,216,.14); outline: 0; }
+.tete-epn { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.sigle-epn { font-weight: 800; font-size: 18px; color: var(--marine); letter-spacing: .2px; }
+.nb-epn { font-size: 12px; font-weight: 700; color: var(--bleu); background: var(--bleu-clair); border-radius: 10px; padding: 2px 9px; white-space: nowrap; }
+.nom-epn { font-weight: 600; color: var(--encre-2); line-height: 1.3; }
+.pied-epn { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12.5px; color: var(--encre-2);
+  border-top: 1px solid var(--trait); padding-top: 9px; margin-top: auto; }
+.pied-epn .statut { min-width: 0; }
+.frise { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 2px; }
+.panneau h2 .frise { margin: 0; }
+.puce-periode { display: inline-flex; align-items: center; justify-content: center; min-width: 46px; padding: 3px 8px; border-radius: 6px;
+  font-size: 12px; font-weight: 700; border: 1px dashed var(--trait-fort); color: var(--gris); background: #fff; }
+.puce-periode.present { background: var(--vert-clair); color: #15803d; border: 1px solid #b7e2c6; }
+.puce-periode.retour { background: var(--rouge-clair); color: #b42323; border: 1px solid #f5c2c2; }
+.puce-periode[data-id] { cursor: pointer; }
+.puce-periode[data-id]:hover { filter: brightness(.95); }
+.lecture-comparaison { margin-bottom: 16px; }
+.lecture-comparaison .lecture p { margin: 0; }
+.comparaison-table td { min-width: 120px; }
+.comparaison-table td:first-child { min-width: 250px; }
+.comparaison-table th.cliquable-th { cursor: pointer; color: var(--bleu); }
+.comparaison-table th.cliquable-th:hover { background: #e3ecf8; }
+.comparaison-table td .statut { min-width: 0; }
