@@ -79,6 +79,17 @@ def fenetre_native(serveur, verification=None) -> bool:
             except Exception:
                 pass
         threading.Thread(target=fermer_sur_demande, daemon=True).start()
+
+        def avant_fermeture(window):  # renvoyer False annule la fermeture de la fenêtre
+            travail = serveur.app.travail
+            if serveur.app.quitter.is_set() or not (travail and travail.get("en_cours")):
+                return True
+            return bool(window.create_confirmation_dialog(
+                TITRE, "Une analyse est en cours. Quitter quand même l'application ?"))
+        try:
+            fenetre.events.closing += avant_fermeture
+        except Exception:
+            pass
         if verification:
             webview.start(verification, (fenetre,), gui="edgechromium")
         else:
