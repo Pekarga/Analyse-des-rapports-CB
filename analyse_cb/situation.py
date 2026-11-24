@@ -102,6 +102,7 @@ class SituationExecution:
     filtre_epn: str = ""
     fichiers: list[Path] = field(default_factory=list)
     systeme: str = ""  # « SIGOBE » si la situation provient de ce système
+    section: str = ""  # ministère de rattachement indiqué par l'état (ex. « Ministère des Eaux et Forêts »)
 
     @property
     def noms_fichiers(self) -> str:
@@ -259,6 +260,9 @@ def extraire_situation(source: SourceSituation, nom_epn: str = "", fiche: FicheE
     sit = SituationExecution(source.chemin, _date_arrete(source))
     if "sigobe" in normaliser(source.texte + " " + source.chemin.name):
         sit.systeme = "SIGOBE"
+    m = re.search(r"Section\s*:\s*\d*\s*(Minist[èe]re[^\n|]{3,90})", source.texte or "")
+    if m:
+        sit.section = re.sub(r"\s+", " ", m.group(1)).strip(" .")
     vus: set[tuple] = set()
     valeurs_epn: set[str] = set()
     cibles = [normaliser(x) for x in (fiche.sigle if fiche else "", fiche.denomination if fiche else "", nom_epn) if x]
@@ -419,6 +423,7 @@ def fusionner(situations: list[SituationExecution]) -> SituationExecution:
         res.avertissements += s.avertissements
         res.filtre_epn = res.filtre_epn or s.filtre_epn
         res.systeme = res.systeme or s.systeme
+        res.section = res.section or s.section
     if len(dates) > 1:
         res.avertissements.append("Les fichiers de situation n'ont pas la même date d'arrêté : "
                                   + ", ".join(f"{d:%d/%m/%Y}" for d in dates) + ".")

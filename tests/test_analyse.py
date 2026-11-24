@@ -523,10 +523,125 @@ def test_ressources_application_empaquetee(tmp_path, monkeypatch):
     assert ressources.dossier_ressources() == RACINE
 
 
-def test_interface_importable():
-    pytest.importorskip("tkinter")
+def _profil_temporaire(monkeypatch, dossier):
+    """Profil d'utilisateur isolé (historique, préférences, documents déposés)."""
+    monkeypatch.setenv("APPDATA", str(dossier))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(dossier))
+    monkeypatch.setenv("ANALYSE_CB_SANS_OUVERTURE", "1")
+
+
+def test_historique_et_tableau_de_bord(res_conforme_ref, res_anomalies_ref, tmp_path, monkeypatch):
+    """Les analyses enregistrées alimentent le tableau de bord ; une nouvelle analyse du même EPN et de la même
+    période remplace la précédente."""
+    _profil_temporaire(monkeypatch, tmp_path)
+    from analyse_cb import historique, tableau
+    from analyse_cb.analyse import charger_parametres
+    from analyse_cb.excel import exporter_tableau_de_bord
+    m = historique.montants(res_conforme_ref)
+    assert m["source"].startswith("situation d'exécution au") and m["credits"] and m["execution"] is not None
+    ident = historique.enregistrer(res_conforme_ref, tmp_path / "a.xlsx")
+    assert historique.periodes()[0]["cle"] == "2099-T2"
+    d = tableau.tableau_de_bord(None, charger_parametres())
+    assert not d["vide"] and d["attendu"] == 50 and d["periode"]["court"] == "T2 2099"
+    assert d["kpi"]["credits"] == m["credits"] and d["kpi"]["execution"] == m["execution"]
+    ligne = d["lignes"][0]
+    assert ligne["statut"] in ("OK", "À surveiller", "Sous-exécution", "Dépassement") and ligne["tutelle"]
+    assert d["ministeres"][0]["credits"] == m["credits"] and d["repartition"]
+    assert d["synthese"]["recommandation"].startswith("Il est recommandé de")
+    # Même EPN, même période : l'analyse est remplacée (pas de doublon).
+    assert historique.enregistrer(res_anomalies_ref, tmp_path / "b.xlsx") == ident
+    assert len(historique.lister()) == 1
+    al = tableau.toutes_alertes(None, charger_parametres())["alertes"]
+    assert any(a["titre"] == "Rapport à retourner au CB" and a["niveau"] == "critique" for a in al)
+    wb = openpyxl.load_workbook(exporter_tableau_de_bord(tableau.tableau_de_bord(None, charger_parametres()),
+                                                         tmp_path / "tdb.xlsx"))
+    assert wb.sheetnames == ["Tableau de bord", "Alertes"]
+    historique.supprimer(ident)
+    assert tableau.tableau_de_bord(None, charger_parametres())["vide"]
+
+
+def test_statut_execution_selon_periode():
+    from analyse_cb.tableau import statut_execution
+    p = {"execution": {"seuil_vigilance": 10, "seuil_sous_execution": 20}}
+    assert statut_execution(72.9, 3, p)[0] == "OK"            # 3e trimestre : 75 % attendus
+    assert statut_execution(60, 3, p)[0] == "À surveiller"
+    assert statut_execution(50, 3, p)[0] == "Sous-exécution"
+    assert statut_execution(101, 2, p)[0] == "Dépassement"
+    assert statut_execution(None, 2, p)[0] == "Non renseigné"
+
+
+def test_serveur_interface_et_api(rapports, references, tmp_path, monkeypatch):
+    """Parcours complet par l'API du serveur local : dépôt des documents, analyse, tableau de bord, paramètres."""
+    import json
+    import time
+    import urllib.error
+    import urllib.request
+    from urllib.parse import quote
+    _profil_temporaire(monkeypatch, tmp_path)
+    from analyse_cb.serveur import Serveur
+    srv = Serveur().demarrer()
+    base = f"http://127.0.0.1:{srv.port}"
+
+    def appel(chemin, data=None, brut=None, entetes=None):
+        h = {"X-Jeton": srv.app.jeton, **(entetes or {})}
+        corps = brut if brut is not None else (json.dumps(data).encode() if data is not None else None)
+        req = urllib.request.Request(base + chemin, data=corps, headers=h, method="POST" if corps is not None else "GET")
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read())
+
+    def deposer(chemin, categorie):
+        return appel("/api/televerser", brut=Path(chemin).read_bytes(),
+                     entetes={"X-Nom-Fichier": quote(Path(chemin).name), "X-Categorie": categorie})
+    try:
+        with urllib.request.urlopen(base + "/", timeout=10) as r:
+            assert b'id="contenu"' in r.read()
+        with urllib.request.urlopen(base + "/static/app.js", timeout=10) as r:
+            assert b"function router" in r.read()
+        with pytest.raises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(base + "/api/etat", timeout=10)
+        assert e.value.code == 403
+        assert appel("/api/tableau")["vide"] is True
+        r = deposer(rapports["conforme"], "rapport")
+        d = deposer(references["decret"], "decret")
+        s = deposer(references["situation"], "situation")
+        faux = tmp_path / "programme.exe"
+        faux.write_bytes(b"MZ")
+        with pytest.raises(urllib.error.HTTPError) as e:
+            deposer(faux, "rapport")
+        assert e.value.code == 400
+        appel("/api/analyser", {"rapports": [{"id": r["id"], "reception": "28/07/2099", "periode": ""}],
+                                "decrets": [d["id"]], "situations": [s["id"]], "charge": "Test",
+                                "sortie": str(tmp_path / "sortie")})
+        debut = time.time()
+        while (t := appel("/api/travail"))["en_cours"]:
+            assert time.time() - debut < 180, "analyse trop longue"
+            time.sleep(0.3)
+        assert t["rapports"][0]["etat"] == "ok", t
+        res = t["resultats"][0]
+        assert Path(res["fichier"]).exists() and res["epn"]
+        tb = appel("/api/tableau")
+        assert not tb["vide"] and tb["lignes"][0]["id"] == res["id"]
+        assert appel("/api/rapports")["rapports"][0]["date_reception"] == "2099-07-28"
+        detail = appel(f"/api/rapport?id={res['id']}")
+        assert detail["fichier_existe"] and detail["donnees"]["appreciation"]
+        p = appel("/api/parametres", {"utilisateur": {"nom": "Test", "fonction": "Chargé d'Études"},
+                                      "execution": {"seuil_vigilance": "5"}})
+        assert p["execution"]["seuil_vigilance"] == 5 and appel("/api/etat")["utilisateur"]["nom"] == "Test"
+        with pytest.raises(urllib.error.HTTPError) as e:
+            appel("/api/parametres", {"delais": {"rapport_etape_date_limite": "31-07"}})
+        assert e.value.code == 400
+        assert Path(appel("/api/exporter", {"periode": tb["periode"]["cle"]})["chemin"]).exists()
+    finally:
+        srv.arreter()
+
+
+def test_lanceur_application(tmp_path, monkeypatch):
+    """Le lanceur vérifie le serveur et l'interface (mode « --test-serveur » utilisé après la construction)."""
+    _profil_temporaire(monkeypatch, tmp_path)
     from analyse_cb import interface
-    assert interface.Application and interface.main
+    assert interface.main and interface.test_serveur() == []
+    if not sys.platform.startswith("win"):
+        assert interface.webview2_installe() is False
 
 
 def test_redaction_commentaires_grille(res_anomalies_ref, tmp_path):

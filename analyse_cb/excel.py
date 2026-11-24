@@ -554,3 +554,49 @@ def tableau_de_bord(resultats: list[tuple[ResultatAnalyse, Path]], sortie: str |
     sortie.parent.mkdir(parents=True, exist_ok=True)
     wb.save(sortie)
     return sortie
+
+
+# ------------------------------------------------------------------ export du tableau de bord de l'application
+def exporter_tableau_de_bord(donnees: dict, sortie: str | Path) -> Path:
+    """Classeur Excel reprenant le tableau de bord d'une période : indicateurs, détail par EPN, alertes."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Tableau de bord"
+    p, k = donnees["periode"], donnees["kpi"]
+    ws["A1"] = f"Tableau de bord – {p['libelle']}"
+    ws["A1"].font = Font(bold=True, size=14, color="1F4E78")
+    ws["A2"] = f"Montants en FCFA ; {donnees['rapports']['total']} rapport(s) analysé(s)."
+    ws["A2"].font = POLICE_AUTO
+    indicateurs = [("Crédits budgétaires", k["credits"]), ("Exécution budgétaire", k["execution"]),
+                   ("Taux d'exécution (%)", k["taux"]),
+                   ("Écarts à analyser (cumul des écarts entre crédits et exécution)", k["ecarts"]),
+                   ("Taux d'exécution attendu à la fin de la période (%)", donnees.get("attendu")),
+                   ("Taux à partir duquel l'exécution est jugée normale (%)", donnees["objectif"]),
+                   ("Rapports à retourner au CB", donnees["rapports"]["retours"]),
+                   ("Rapports transmis hors délai", donnees["rapports"]["hors_delai"])]
+    for i, (lib, val) in enumerate(indicateurs, start=4):
+        ws.cell(i, 1, lib).font = Font(bold=True)
+        c = ws.cell(i, 2, round(val, 2) if isinstance(val, float) else val)
+        c.number_format = "0.00" if "%" in lib else "# ##0"
+    i = len(indicateurs) + 6
+    titres = ["EPN", "Ministère de tutelle", "Crédits", "Exécution", "Taux (%)", "Écart", "Statut", "Source des montants",
+              "Forme (%)", "Fond (%)", "Anomalies majeures", "Suite"]
+    _entetes(ws, i, titres, [40, 34, 18, 18, 10, 18, 16, 28, 10, 10, 12, 26])
+    for j, l in enumerate(donnees["lignes"], start=i + 1):
+        _ligne(ws, j, [l["epn"], l["tutelle"], l["credits"], l["execution"],
+                       round(l["taux"], 2) if l["taux"] is not None else None, l["ecart"], l["statut"], l["source"],
+                       l["forme"], round(l["fond"], 1) if l["fond"] is not None else None, l["anomalies_majeures"],
+                       "Retour au CB" if l["retour"] else "Exploitable"])
+        for col in (3, 4, 6):
+            ws.cell(j, col).number_format = "# ##0"
+        ws.cell(j, 7).fill = PatternFill("solid", fgColor={"rouge": ROUGE, "orange": ORANGE, "jaune": "FFF2CC",
+                                                            "vert": VERT}.get(l["couleur"], GRIS))
+    ws2 = wb.create_sheet("Alertes")
+    _entetes(ws2, 1, ["Niveau", "Alerte", "EPN", "Détail"], [12, 40, 40, 90])
+    for j, a in enumerate(donnees["alertes"], start=2):
+        _ligne(ws2, j, [{"critique": "Critique", "attention": "Attention", "info": "Information"}.get(a["niveau"], a["niveau"]),
+                        a["titre"], a.get("epn", ""), a.get("detail", "")])
+    sortie = Path(sortie)
+    sortie.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(sortie)
+    return sortie

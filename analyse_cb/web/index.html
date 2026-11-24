@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Analyse des rapports des Contrôleurs Budgétaires</title>
+  <link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="cadre">
+    <aside class="barre">
+      <div class="marque">
+        <div class="logo" id="logo"></div>
+        <div class="inst1" id="inst1">Ministère des Finances et du Budget</div>
+        <div class="inst2" id="inst2">Côte d'Ivoire</div>
+      </div>
+      <nav class="nav" id="nav"></nav>
+      <div class="bas-barre">
+        <a class="profil" href="#/parametres" title="Modifier le profil">
+          <span class="avatar" id="avatar"></span>
+          <span><span class="profil-nom" id="profil-nom">Profil à compléter</span>
+          <span class="profil-role" id="profil-role">Chargé d'Études</span></span>
+        </a>
+        <button class="quitter" id="quitter" type="button"></button>
+      </div>
+    </aside>
+    <main class="contenu" id="contenu" tabindex="-1"></main>
+  </div>
+  <div class="voile" id="voile" hidden></div>
+  <aside class="tiroir" id="tiroir" hidden aria-live="polite"></aside>
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+  <noscript><div class="vide"><h3>JavaScript est désactivé</h3><p>Activez JavaScript pour utiliser l'application.</p></div></noscript>
+  <script>
+    /* Moteur d'affichage trop ancien (ex. Internet Explorer) : message explicite plutôt qu'une page vide. */
+    (function () {
+      var moderne = !!(window.fetch && window.Promise);
+      try { new Function("const f = (a = 1) => `${a}`; return f();")(); } catch (e) { moderne = false; }
+      if (!moderne) {
+        document.getElementById("contenu").innerHTML = '<div class="vide"><h3>Affichage impossible avec ce navigateur</h3>'
+          + '<p>Ouvrez l’adresse de cette page dans Microsoft Edge, Google Chrome ou Firefox.</p></div>';
+        window.__ancien = true;
+      }
+    })();
+  </script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

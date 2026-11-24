@@ -68,6 +68,24 @@ jobs:
           if (-not (Test-Path "verification\Analyse_rapport_exemple_conforme.xlsx")) { throw "Le fichier d'analyse n'a pas été produit (code $($p.ExitCode))." }
           Write-Host "Exécutable vérifié."
 
+      - name: Vérification de l'interface (serveur local intégré à l'exécutable)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist\AnalyseRapportsCB\AnalyseRapportsCB.exe" -ArgumentList @("--test-serveur", "test_serveur.txt") -Wait -PassThru
+          Get-Content test_serveur.txt -ErrorAction SilentlyContinue
+          if ($p.ExitCode -ne 0) { throw "L'interface n'est pas servie correctement par l'exécutable (code $($p.ExitCode))." }
+          Write-Host "Interface vérifiée."
+
+      - name: Vérification de la fenêtre de l'application (Edge WebView2)
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist\AnalyseRapportsCB\AnalyseRapportsCB.exe" -ArgumentList @("--test-fenetre", "test_fenetre.txt") -Wait -PassThru
+          Get-Content test_fenetre.txt -ErrorAction SilentlyContinue
+          if ($p.ExitCode -ne 0) { throw "Fenêtre non vérifiée sur cette machine (code $($p.ExitCode))." }
+          Write-Host "Fenêtre de l'application vérifiée."
+
       - name: Vérification de l'OCR intégré (décret d'exemple « scanné »)
         shell: pwsh
         run: |

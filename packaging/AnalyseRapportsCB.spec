@@ -6,7 +6,8 @@ from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, co
 
 racine = Path(SPECPATH).parent
 datas = [(str(racine / "config"), "config"), (str(racine / "modeles"), "modeles"),
-         (str(racine / "packaging" / "icone.ico"), "packaging"), (str(racine / "packaging" / "icone.png"), "packaging")]
+         (str(racine / "packaging" / "icone.ico"), "packaging"), (str(racine / "packaging" / "icone.png"), "packaging"),
+         (str(racine / "analyse_cb" / "web"), "analyse_cb/web")]
 datas += collect_data_files("docx") + collect_data_files("pdfminer") + collect_data_files("pypdfium2")
 datas += collect_data_files("pypdfium2_raw")
 binaries = collect_dynamic_libs("pypdfium2_raw") + collect_dynamic_libs("pypdfium2")
@@ -18,8 +19,10 @@ a = Analysis(
     pathex=[str(racine)],
     binaries=binaries,
     datas=datas,
-    hiddenimports=["analyse_cb.interface", "analyse_cb.__main__", "pytesseract", "cv2", "numpy", "numpy.core.multiarray"]
-                  + collect_submodules("numpy.core") + collect_submodules("numpy._core"),
+    hiddenimports=["analyse_cb.interface", "analyse_cb.__main__", "analyse_cb.serveur", "analyse_cb.historique",
+                   "analyse_cb.tableau", "pytesseract", "cv2", "numpy", "numpy.core.multiarray"]
+                  + collect_submodules("numpy.core") + collect_submodules("numpy._core")
+                  + collect_submodules("webview", filter=lambda m: ".platforms." not in m or m.endswith(("winforms", "edgechromium", "mshtml"))),
     excludes=["streamlit", "pandas", "matplotlib", "IPython", "pytest"],
     noarchive=False,
 )

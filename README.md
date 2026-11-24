@@ -35,13 +35,16 @@ L'outil est disponible sous forme d'**application Windows** : un installateur `A
 
 **Obtenir l'installateur** : il est fabriqué automatiquement sur GitHub à chaque modification de l'outil (onglet **Actions** du dépôt → workflow « Application Windows » → dernière exécution → artefact **AnalyseRapportsCB-Windows**, qui contient l'installateur et une version portable en .zip). Pour une version publiée, poussez un tag `vX.Y.Z` : l'installateur est alors joint à la « Release » correspondante.
 
-**Utilisation** :
+**Utilisation** : l'application s'ouvre sur un **tableau de bord** et comporte, dans la barre latérale :
 
-1. ajouter les rapports (fichiers ou dossier entier) et, par double-clic, saisir leur date de réception ;
-2. ajouter, si vous les avez, les décrets de création et les situations d'exécution (SIGOBE, Excel, CSV, PDF) ;
-3. indiquer le Chargé d'Études et le dossier des résultats, puis cliquer sur **Lancer l'analyse**.
+- **Tableau de bord** : crédits, exécution, taux d'exécution et écarts de la période choisie (avec l'évolution par rapport à la période précédente), évolution de l'exécution sur l'exercice, répartition des écarts par ministère de tutelle, synthèse et alertes avec une recommandation, détail par EPN ou par ministère (statut « OK », « À surveiller », « Sous-exécution » ou « Dépassement » selon le taux attendu à la fin de la période : 25 %, 50 %, 75 % ou 100 %) et graphique prévu / réalisé (par EPN, par ministère ou par nature de dépense). Le bouton **Exporter** produit ce tableau de bord au format Excel ;
+- **Analyse des rapports** : déposer les rapports (Word ou PDF, y compris scannés), saisir leur date de réception, ajouter si possible les décrets de création et les situations d'exécution (SIGOBE, Excel, CSV, PDF), puis **Lancer l'analyse**. Chaque rapport donne son fichier d'analyse Excel (grille de la DCB rédigée) et alimente le tableau de bord ;
+- **Comparaison budgétaire** : recettes et dépenses prévues et réalisées par EPN, prévu / réalisé par nature de dépense et évolution du taux d'exécution d'une période à l'autre ;
+- **Alertes & Anomalies** : rapports à retourner au CB, textes de création mal cités, montants contredits par la situation d'exécution, régulation non répercutée, Conseil de gestion non réuni, dépassements et sous-exécutions… ;
+- **Rapports détaillés** : historique des analyses ; un clic ouvre l'appréciation générale, les alertes, les principaux constats et les montants retenus du rapport, ainsi que son fichier Excel ;
+- **Paramètres** : profil (nom, fonction), institution et logo affichés dans la barre latérale, dossier des résultats, délais de transmission, seuils d'appréciation et d'exécution.
 
-Les résultats s'affichent dans la fenêtre (forme, fond, anomalies majeures, suite à donner) ; un double-clic ouvre le fichier d'analyse Excel. Avec plusieurs rapports, un tableau de bord consolidé est aussi produit. Le menu **Paramètres** ouvre les fichiers modifiables (délais, seuils, référentiel des EPN), copiés au premier lancement dans `%APPDATA%\AnalyseRapportsCB`.
+L'interface est servie par un petit serveur interne à l'application (adresse locale 127.0.0.1, protégée par un jeton propre à chaque lancement) et s'affiche dans la fenêtre de l'application grâce au moteur **Microsoft Edge WebView2**, présent sur Windows 10 et 11. Si ce moteur manque, elle s'ouvre dans le navigateur par défaut et une petite fenêtre permet de la rouvrir ou de quitter. Les analyses sont conservées dans `%APPDATA%\AnalyseRapportsCB\historique.db` ; une nouvelle analyse du même EPN pour la même période remplace la précédente. Aucune donnée n'est envoyée sur Internet.
 
 Construction manuelle (poste Windows avec Python 3.12) : `pip install -r requirements-dev.txt`, puis `pyinstaller packaging/AnalyseRapportsCB.spec` et `iscc packaging\installateur.iss` (Inno Setup 6). Placez au préalable le dossier de Tesseract (avec `tessdata\fra.traineddata`) dans `tesseract\` à la racine du dépôt pour l'intégrer à l'application.
 
@@ -74,7 +77,7 @@ pip install streamlit pandas
 python -m analyse_cb.interface
 ```
 
-(ou double-clic sur `AnalyseRapportsCB.pyw`).
+(ou double-clic sur `AnalyseRapportsCB.pyw`). Sous Windows, l'application s'ouvre dans sa propre fenêtre (paquet `pywebview`, installé avec `requirements.txt`) ; ailleurs, ou avec l'option `--navigateur`, elle s'ouvre dans le navigateur par défaut.
 
 ### 2. Interface web
 
@@ -176,7 +179,11 @@ analyse_cb/
   analyse.py     orchestration et appréciations (forme / fond)
   excel.py       remplissage du modèle, onglets de détail, tableau de bord
   __main__.py    ligne de commande
-  interface.py   application de bureau (Tkinter)
+  historique.py  historique des analyses (base SQLite locale) et indicateurs de chaque rapport
+  tableau.py     indicateurs du tableau de bord (taux, statuts, écarts, alertes, synthèse)
+  serveur.py     serveur local de l'application (interface et API)
+  web/           interface de l'application (HTML, CSS, JavaScript, sans dépendance externe)
+  interface.py   lanceur de l'application (fenêtre Edge WebView2 ou navigateur)
   ressources.py  emplacement des ressources (application empaquetée, Tesseract intégré)
 app.py           interface web (Streamlit)
 packaging/       construction de l'application Windows (PyInstaller, installateur Inno Setup, icône)

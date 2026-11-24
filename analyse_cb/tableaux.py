@@ -675,7 +675,7 @@ class ControleTableaux:
                     a[f"depenses_{role}"] = v
             for nom, motif in (("personnel", r"personnel"), ("biens_services", r"biens et services"),
                                ("transferts", r"transfert"), ("investissement", r"investissement")):
-                for role in ("engage", "realise"):
+                for role in ("actuel", "engage", "realise"):
                     v = t6.somme_groupe(motif, role)
                     if v is not None:
                         a[f"{nom}_{role}"] = v
