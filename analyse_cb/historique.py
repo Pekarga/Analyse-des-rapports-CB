@@ -199,6 +199,7 @@ def enregistrer(res, fichier_analyse: str | Path, con: sqlite3.Connection | None
     """Enregistre (ou remplace) l'analyse d'un rapport ; renvoie son identifiant."""
     from .commentaires import aerer
     from .excel import suite_a_donner
+    from . import natures
     from .ratios import ratios_rapport
     from .redaction import appreciation_generale
     fermer = con is None
@@ -211,6 +212,7 @@ def enregistrer(res, fichier_analyse: str | Path, con: sqlite3.Connection | None
         "periode_libelle": res.periode.libelle,
         "montants": m,
         "ratios": ratios_rapport(res, m["source"]),
+        "natures": natures.extraire(res),
         "difficultes": {cle: [{"texte": e.texte, "categorie": e.categorie, "page": e.page}
                               for e in (res.difficultes or {}).get(cle, [])] for cle in ("difficultes", "suggestions")},
         "alertes": alertes(res),

@@ -43,6 +43,7 @@ const ICONES = {
   corbeille: "M4 7h16M9.5 7V4h5v3M6 7l1 13.5h10L18 7",
   export: "M12 4v11M7.5 10.5 12 15l4.5-4.5M4 20h16",
   balance: "M12 4v16M5 20h14M4 8h16M7 8l-3 6a3 3 0 0 0 6 0zM17 8l-3 6a3 3 0 0 0 6 0z",
+  couches: "M12 3 2.5 8 12 13l9.5-5zM2.5 12.5 12 17.5l9.5-5M2.5 16.5 12 21.5l9.5-5",
 };
 function icone(nom, extra = "") {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" ${extra}><path d="${ICONES[nom] || ""}"/></svg>`;
@@ -82,6 +83,7 @@ const PAGES = [
   ["analyse", "Analyse des rapports", "analyse"],
   ["comparaison", "Comparaison budgétaire", "comparaison"],
   ["ratios", "Analyse des ratios", "pourcent"],
+  ["natures", "Nature économique", "couches"],
   ["alertes", "Alertes & Anomalies", "alerte"],
   ["rapports", "Rapports détaillés", "rapports"],
   ["parametres", "Paramètres", "parametres"],
@@ -119,7 +121,7 @@ async function majEnvironnement() {
 async function router() {
   const page = (location.hash.replace(/^#\/?/, "") || "tableau").split("?")[0];
   document.querySelectorAll(".nav a").forEach(a => a.classList.toggle("actif", a.dataset.page === page));
-  const rendu = { tableau: pageTableau, analyse: pageAnalyse, comparaison: pageComparaison, ratios: pageRatios, alertes: pageAlertes,
+  const rendu = { tableau: pageTableau, analyse: pageAnalyse, comparaison: pageComparaison, ratios: pageRatios, natures: pageNatures, alertes: pageAlertes,
     rapports: pageRapports, parametres: pageParametres, aide: pageAide, apropos: pageAPropos }[page] || pageTableau;
   try { await rendu(); } catch (err) { contenu().innerHTML = videHtml("alerte", "Une erreur est survenue", esc(err.message)); }
   contenu().focus();
@@ -402,6 +404,7 @@ const COUL_RATIOS = { RRP: "#1f9d4c", RDP: "#9b59b6", RDF: "#f59e0b", RDI: "#156
 const FOND_RATIOS = { RRP: "fond-vert", RDP: "fond-violet", RDF: "fond-orange", RDI: "fond-bleu", RDA: "fond-gris" };
 const COUL_CATEGORIES = { personnel: "#9b59b6", biens_services: "#f59e0b", transferts: "#14a3a3", investissement: "#1565d8", autres: "#a0aec0" };
 function pluriel(n, mot) { return `${n} ${mot}${n > 1 ? "s" : ""}`; }
+function accord(n, singulier, plurielForme) { return `${n} ${n > 1 ? plurielForme : singulier}`; }
 function variationPoints(v) {
   return v == null ? "" : `<small class="neutre">${v >= 0 ? "↑" : "↓"} ${signe(v, nf1.format(Math.abs(v)) + " pt")}</small>`;
 }
@@ -521,6 +524,93 @@ function brancherDifficultes() {
     b.parentElement.querySelectorAll("li.masque").forEach(li => li.classList.remove("masque"));
     b.remove();
   });
+}
+
+/* ------------------------------------------------------------------ nature économique */
+function svgNatures(items, u, L) {
+  const g = Math.min(330, Math.round(L * 0.42)), d = 118, h0 = 6, hb = 24, ecart = 12, lw = Math.max(80, L - g - d);
+  const H = h0 + items.length * (hb + ecart);
+  const max = Math.max(...items.map(x => x.actuel || 0), 1);
+  const car = Math.max(14, Math.floor((g - 14) / 7.4));
+  let s = `<svg viewBox="0 0 ${L} ${H}" width="${L}" height="${H}" ${TXT} role="img" aria-label="Principales natures économiques">`;
+  items.forEach((x, i) => {
+    const y = h0 + i * (hb + ecart), w = v => lw * (v || 0) / max;
+    const lib = `${x.code} ${x.libelle}`;
+    s += `<text x="${g - 10}" y="${y + hb / 2 + 4}" text-anchor="end" font-size="12.5" fill="#0f1e36"><title>${esc(lib)}</title>${esc(lib.length > car ? lib.slice(0, car - 1) + "…" : lib)}</text>`;
+    s += `<rect x="${g}" y="${y}" width="${w(x.actuel)}" height="${hb}" rx="3" fill="#dbe7fb"><title>Crédits actuels : ${montant(x.actuel, u)}</title></rect>`;
+    s += `<rect x="${g}" y="${y + 3}" width="${w(x.engage)}" height="8" rx="2" fill="#1565d8"><title>Engagements : ${montant(x.engage, u)}</title></rect>`;
+    s += `<rect x="${g}" y="${y + 13}" width="${w(x.realise)}" height="8" rx="2" fill="#f59e0b"><title>Ordonnancements : ${montant(x.realise, u)}</title></rect>`;
+    const taux = x.actuel ? (x.realise || 0) / x.actuel * 100 : null;
+    s += `<text x="${g + w(x.actuel) + 8}" y="${y + hb / 2 + 4}" font-size="12" font-weight="700" fill="#0f1e36">${nf1.format((x.actuel || 0) / u.diviseur)}<tspan font-weight="400" fill="#56657a"> · ${taux == null ? "—" : nf0.format(taux) + " %"}</tspan></text>`;
+  });
+  return s + "</svg>";
+}
+async function pageNatures() {
+  const q = new URLSearchParams();
+  if (etat.periode) q.set("periode", etat.periode);
+  if (etat.natureChoix) q.set("epn", etat.natureChoix);
+  const d = await api("/api/natures?" + q);
+  if (d.vide) {
+    contenu().innerHTML = entete("Analyse par nature économique", "Exécution des dépenses et des recettes, nature par nature") + videHtml("couches", "Aucune donnée", "Analysez d'abord des rapports.", BOUTON_ANALYSER);
+    return;
+  }
+  etat.periode = d.periode.cle;
+  const u = d.unite;
+  const choixEpn = d.epns.length ? `<div class="choix-periode">${icone("rapports")}<label for="epn-nature">EPN :</label><select id="epn-nature">
+      ${d.epns.length > 1 ? `<option value="tous" ${d.choix === "tous" ? "selected" : ""}>Ensemble des EPN (${d.epns.length})</option>` : ""}
+      ${d.epns.map(e => `<option value="${e.id}" ${String(e.id) === d.choix ? "selected" : ""}>${esc(e.epn)}</option>`).join("")}</select></div>` : "";
+  const tete = entete("Analyse par nature économique", "Exécution des dépenses et des recettes, nature par nature", choixPeriode(d.periodes, d.periode.cle) + choixEpn);
+  if (!d.epns.length) {
+    contenu().innerHTML = tete + videHtml("couches", "Analyse par nature non disponible", "Relancez l'analyse des rapports de cette période avec cette version de l'application (situation d'exécution SIGOBE de préférence).", BOUTON_ANALYSER);
+    brancherPeriode(pageNatures);
+    return;
+  }
+  const t = d.total, inscrites = d.categories.reduce((a, c) => a + c.natures.length, 0);
+  const cartes = `<div class="kpis">
+    ${carteKpi("couches", "fond-bleu", "Natures dotées", `${d.natures}`, `<div class="delta">sur ${accord(inscrites, "nature inscrite", "natures inscrites")}</div>`)}
+    ${carteKpi("coche", "fond-vert", "Taux d'engagement", pct(t.taux_engagement), `<div class="delta">ordonnancé : ${pct(t.taux)}</div>`)}
+    ${carteKpi("base", "fond-orange", "Crédits disponibles", montant((t.actuel || 0) - (t.engage || 0), u), `<div class="delta">non encore engagés, sur ${montant(t.actuel, u)}</div>`)}
+    ${carteKpi("alerte", "fond-rouge", "Reste à payer", montant((t.realise || 0) - (t.paye || 0), u), `<div class="delta">ordonnancé non pris en charge</div>`)}</div>`;
+  const points = d.points.map(p => {
+    const ic = p.niveau === "critique" ? "exclamation" : p.niveau === "attention" ? "alerte" : "info";
+    return `<div class="point"><span class="pastille ${p.niveau}">${icone(ic)}</span><div><div class="titre">${esc(p.titre)}</div><div class="detail">${insecable(p.detail)}</div></div></div>`;
+  }).join("") || `<p class="aide" style="margin:0">Aucun point d'attention.</p>`;
+  const panneauPoints = `<div class="panneau points-natures"><h2>${icone("cloche")}Points d'attention</h2>${points}</div>`;
+  const panneauLecture = `<div class="panneau"><h2>${icone("rapports")}Lecture</h2><div class="lecture"><p>${insecable(d.lecture || "—")}</p></div>
+    <p class="aide pied">Sources : ${esc(d.sources.join(" ; ") || "—")}.${d.choix === "tous" ? " Natures cumulées sur l'ensemble des EPN de la période." : ""}${d.a_reanalyser ? ` ${pluriel(d.a_reanalyser, "rapport")} à réanalyser pour être pris en compte.` : ""}</p></div>`;
+  const graph = d.top.length ? `<div class="panneau" style="margin-top:16px"><h2>${icone("histogramme")}Principales natures (crédits actuels)</h2>
+    <div class="legende" style="justify-content:flex-start"><span><i style="background:#dbe7fb"></i>Crédits actuels</span><span><i style="background:#1565d8"></i>Engagements</span><span><i style="background:#f59e0b"></i>Ordonnancements</span><span>Montants en ${esc(u.libelle)} · taux d'exécution</span></div>
+    <div class="graphique" id="graph-natures"></div></div>` : "";
+  const ligneNature = (n, dep) => `<tr class="nature ${["Dépassement", "Non engagé", "Sous-exécution", "À surveiller"].includes(n.statut) ? "a-examiner" : ""} ${n.statut === "Crédits supprimés" ? "supprimee" : ""}">
+      <td class="centre code">${esc(n.code)}</td><td class="texte">${esc(n.libelle)}${n.activites > 1 ? `<div class="sous-ligne">${n.activites} activités</div>` : ""}</td>
+      <td>${montant(n.initial, u, false)}</td><td>${montant(n.actuel, u, false)}</td>
+      ${dep ? `<td>${montant(n.engage, u, false)}</td>` : ""}<td>${montant(n.realise, u, false)}</td>
+      <td>${pct(n.taux)}</td><td class="centre">${statutHtml(n.statut, n.couleur)}</td></tr>`;
+  const ligneGroupe = (g, dep) => `<tr class="categorie"><td></td><td class="texte">${esc(g.libelle)}</td><td>${montant(g.initial, u, false)}</td><td>${montant(g.actuel, u, false)}</td>
+      ${dep ? `<td>${montant(g.engage, u, false)}</td>` : ""}<td>${montant(g.realise, u, false)}</td><td>${pct(g.taux)}</td><td></td></tr>`;
+  const tableDep = d.categories.length ? `<div class="panneau" style="margin-top:16px"><h2>${icone("tableau")}Dépenses par nature économique
+      <span class="droite onglets compact" id="filtre-natures"><button data-f="toutes" class="actif">Toutes</button><button data-f="examiner">À examiner</button><button data-f="supprimees">Crédits supprimés</button></span></h2>
+    <div class="defilant"><table class="donnees" id="table-natures"><thead><tr><th>Nature</th><th>Libellé</th><th>Crédits initiaux<small>${esc(u.libelle)}</small></th><th>Crédits actuels<small>${esc(u.libelle)}</small></th><th>Engagements<small>${esc(u.libelle)}</small></th><th>Ordonnancements<small>${esc(u.libelle)}</small></th><th>Taux<small>%</small></th><th>Statut</th></tr></thead>
+    <tbody>${d.categories.map(g => ligneGroupe(g, true) + g.natures.map(n => ligneNature(n, true)).join("")).join("")}
+      <tr class="total"><td></td><td class="texte">Total des dépenses</td><td>${montant(t.initial, u, false)}</td><td>${montant(t.actuel, u, false)}</td><td>${montant(t.engage, u, false)}</td><td>${montant(t.realise, u, false)}</td><td>${pct(t.taux)}</td><td></td></tr></tbody></table></div>
+    <p class="aide pied">Taux d'exécution : ordonnancements / crédits actuels. Statuts : « Dépassement » (engagements ou ordonnancements supérieurs aux crédits), « Non engagé » (crédits sans aucun engagement), « Crédits supprimés » (crédits initiaux ramenés à zéro), sinon selon le taux attendu à la fin de la période.</p></div>` : "";
+  const tr = d.total_recettes;
+  const tableRec = d.recettes.length ? `<div class="panneau" style="margin-top:16px"><h2>${icone("base")}Recettes par nature économique</h2>
+    <div class="defilant"><table class="donnees"><thead><tr><th>Nature</th><th>Libellé</th><th>Prévisions initiales<small>${esc(u.libelle)}</small></th><th>Prévisions actuelles<small>${esc(u.libelle)}</small></th><th>Recouvrements<small>${esc(u.libelle)}</small></th><th>Taux<small>%</small></th><th>Statut</th></tr></thead>
+    <tbody>${d.recettes.map(g => ligneGroupe(g, false) + g.natures.map(n => ligneNature(n, false)).join("")).join("")}
+      <tr class="total"><td></td><td class="texte">Total des recettes</td><td>${montant(tr.initial, u, false)}</td><td>${montant(tr.actuel, u, false)}</td><td>${montant(tr.realise, u, false)}</td><td>${pct(tr.taux)}</td><td></td></tr></tbody></table></div></div>` : "";
+  contenu().innerHTML = tete + cartes + `<div class="grille-2-egal haut">${panneauPoints}${panneauLecture}</div>` + graph + tableDep + tableRec;
+  if (d.top.length) graphique(document.getElementById("graph-natures"), L => svgNatures(d.top, u, L));
+  document.querySelectorAll("#filtre-natures button").forEach(b => b.onclick = () => {
+    const f = b.dataset.f;
+    document.querySelectorAll("#filtre-natures button").forEach(x => x.classList.toggle("actif", x === b));
+    document.querySelectorAll("#table-natures tr.nature").forEach(tr => {
+      tr.hidden = f === "examiner" ? !tr.classList.contains("a-examiner") : f === "supprimees" ? !tr.classList.contains("supprimee") : false;
+    });
+  });
+  const sel = document.getElementById("epn-nature");
+  if (sel) sel.onchange = () => { etat.natureChoix = sel.value; pageNatures(); };
+  brancherPeriode(pageNatures);
 }
 
 /* ------------------------------------------------------------------ analyse des ratios */
@@ -934,6 +1024,11 @@ async function ouvrirRapport(id) {
         <td class="centre">${x.cite == null ? '<span class="nc">non cité</span>' : `${pct(x.cite)} <span class="cite ${x.coherent === true ? "ok" : x.coherent === false ? "ko" : "nv"}">${x.coherent === true ? "concordant" : x.coherent === false ? "discordant" : "non vérifiable"}</span>`}</td></tr>`).join("")}</tbody></table>
       <p class="aide" style="margin:8px 0 0">Source : ${esc(D.ratios.source)} ; base : ${esc(D.ratios.base)}.</p>
       ${r.lecture_ratios ? `<p class="lecture" style="margin:8px 0 0">${insecable(r.lecture_ratios)}</p>` : ""}</div>` : ""}
+    ${r.natures_resume ? `<div class="panneau"><h2>Nature économique</h2>
+      <p class="lecture" style="margin:0 0 10px">${insecable(r.natures_resume.lecture)}</p>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span class="etiquette">${accord(r.natures_resume.natures, "nature dotée", "natures dotées")}</span>
+        <span class="etiquette">${pluriel(r.natures_resume.points, "point")} d'attention</span>
+        <button class="bouton" id="t-natures">${icone("couches")}Voir l'analyse par nature</button></div></div>` : ""}
     ${D.difficultes ? `<div class="panneau ds"><h2>Difficultés et suggestions</h2><div class="grille-ds une">
       <div class="colonne-ds difficultes"><h3>Difficultés <span class="compteur">${D.difficultes.difficultes.length}</span></h3>${D.difficultes.difficultes.length ? listeDsHtml(D.difficultes.difficultes, CATEGORIES_DS, false) : '<p class="aide" style="margin:0">Aucune difficulté signalée.</p>'}</div>
       <div class="colonne-ds suggestions"><h3>Suggestions <span class="compteur">${D.difficultes.suggestions.length}</span></h3>${D.difficultes.suggestions.length ? listeDsHtml(D.difficultes.suggestions, CATEGORIES_DS, false) : '<p class="aide" style="margin:0">Aucune suggestion formulée.</p>'}</div></div></div>` : ""}
@@ -952,6 +1047,13 @@ async function ouvrirRapport(id) {
   t.querySelector(".fermer").onclick = fermerTiroir;
   document.getElementById("t-excel").onclick = () => post("/api/ouvrir", { quoi: "fichier", id }).catch(err => toast(err.message, "erreur"));
   document.getElementById("t-dossier").onclick = () => post("/api/ouvrir", { quoi: "dossier", id }).catch(err => toast(err.message, "erreur"));
+  const lienNatures = document.getElementById("t-natures");
+  if (lienNatures) lienNatures.onclick = () => {
+    etat.natureChoix = String(id);
+    etat.periode = r.periode_cle;
+    fermerTiroir();
+    if (location.hash === "#/natures") pageNatures(); else location.replace("#/natures");
+  };
   document.getElementById("t-supprimer").onclick = async () => {
     if (!confirm("Retirer cette analyse de l'historique ? Le fichier Excel n'est pas supprimé.")) return;
     await post("/api/supprimer", { id });

@@ -566,7 +566,7 @@ def test_historique_et_tableau_de_bord(res_conforme_ref, res_anomalies_ref, tmp_
     assert any(a["titre"] == "Rapport à retourner au CB" and a["niveau"] == "critique" for a in al)
     wb = openpyxl.load_workbook(exporter_tableau_de_bord(tableau.tableau_de_bord(None, charger_parametres()),
                                                          tmp_path / "tdb.xlsx"))
-    assert wb.sheetnames == ["Tableau de bord", "Ratios", "Difficultés-Suggestions", "Alertes"]
+    assert wb.sheetnames == ["Tableau de bord", "Ratios", "Natures économiques", "Difficultés-Suggestions", "Alertes"]
     assert wb["Ratios"]["A2"].value and wb["Difficultés-Suggestions"]["A2"].value in ("Difficulté", "Suggestion")
     historique.supprimer(ident)
     assert tableau.tableau_de_bord(None, charger_parametres())["vide"]
@@ -632,6 +632,41 @@ def test_dates_limites_de_transmission(tmp_path, monkeypatch):
     assert ressources.fichier_config("parametres.toml") == copie
     assert "trimestre_3_date_limite" in copie.read_text(encoding="utf-8")
     assert (tmp_path / "AnalyseRapportsCB" / "parametres.avant-3.2.toml").exists()
+
+
+def test_analyse_par_nature_economique():
+    """Natures cumulées sur les activités, statuts, points d'attention et lecture (lignes de type SIGOBE)."""
+    import types
+    from analyse_cb import natures
+    from analyse_cb.situation import LigneSituation
+
+    def ligne(code, act, groupe, **v):
+        return LigneSituation("depenses", code, f"{code} Libellé {code}", groupe, v, activite=act)
+    lignes = [
+        ligne("601100", "90042200031", "biens_services", initial=10.0, actuel=10.0, engage=10.0, ordonnance=10.0, paye=8.0),
+        ligne("601100", "90042200032", "biens_services", initial=5.0, actuel=5.0, engage=4.0, ordonnance=4.0, paye=4.0),
+        ligne("662110", "90042200029", "personnel", initial=35.0, actuel=33.0, engage=0.0, ordonnance=0.0, paye=0.0),
+        ligne("611100", "90042200031", "biens_services", initial=3.0, actuel=0.0, engage=0.0, ordonnance=0.0, paye=0.0),
+        ligne("245110", "90042200031", "biens_services", initial=100.0, actuel=100.0, engage=100.0, ordonnance=100.0, paye=100.0),
+        ligne("601200", "90042200031", "biens_services", initial=4.0, actuel=4.0, engage=6.0, ordonnance=5.0, paye=5.0),
+    ]
+    sit = types.SimpleNamespace(lignes=lignes, lignes_de=lambda sens: lignes if sens == "depenses" else [],
+                                date_arrete=date(2026, 10, 31), systeme="SIGOBE")
+    dep = natures._depuis_situation(sit, "depenses")
+    n = {x["code"]: x for x in dep}
+    assert n["601100"]["actuel"] == 15 and n["601100"]["activites"] == 2 and n["601100"]["libelle"] == "Libellé 601100"
+    a = natures.analyser(dep, [], 3, {})
+    statuts = {x["code"]: x["statut"] for c in a["categories"] for x in c["natures"]}
+    assert statuts == {"601100": "OK", "662110": "Non engagé", "611100": "Crédits supprimés", "245110": "OK",
+                       "601200": "Dépassement"}
+    titres = " | ".join(p["titre"] for p in a["points"])
+    assert a["points"][0]["niveau"] == "critique" and "dépassement" in titres
+    assert "sans aucun engagement" in titres and "Ordonnancements non encore payés" in titres
+    assert "Imputation à vérifier" in titres and "régulation" in titres
+    assert "Aucun engagement n'a été pris sur 1 nature dotée" in a["lecture"] and "(s)" not in a["lecture"]
+    assert [c["code"] for c in a["categories"]] == ["personnel", "biens_services"]
+    cumul = natures.fusionner([dep, dep])
+    assert next(x for x in cumul if x["code"] == "601100")["actuel"] == 30
 
 
 def test_statut_execution_selon_periode():
@@ -706,6 +741,8 @@ def test_serveur_interface_et_api(rapports, references, tmp_path, monkeypatch):
         tb = appel("/api/tableau")
         assert not tb["vide"] and tb["lignes"][0]["id"] == res["id"]
         assert appel("/api/rapports")["rapports"][0]["date_reception"] == "2099-07-28"
+        an = appel("/api/natures")
+        assert an["epns"] and an["recettes"] and an["sources"][0].startswith("situation d'exécution")
         ar = appel("/api/ratios")
         assert not ar["vide"] and ar["lignes"][0]["ratios"] and ar["lignes"][0]["lecture"]
         assert tb["difficultes"]["rapports"] == 1

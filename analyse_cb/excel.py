@@ -259,6 +259,72 @@ def suite_a_donner(res: ResultatAnalyse) -> str:
 
 
 # ------------------------------------------------------------------ onglets de détail
+COULEURS_STATUT = {"rouge": ROUGE, "orange": ORANGE, "jaune": "FFF2CC", "vert": VERT, "gris": GRIS, "bleu": BLEU}
+
+
+def _onglet_natures(wb, res) -> None:
+    """Analyse par nature économique (situation d'exécution, sinon tableaux du rapport)."""
+    from . import natures
+    from .analyse import charger_parametres
+    from .historique import cle_periode
+    n = natures.extraire(res)
+    if not n["depenses"] and not n["recettes"]:
+        return
+    a = natures.analyser(n["depenses"], n["recettes"], cle_periode(res.periode)[2], charger_parametres())
+    ws = wb.create_sheet("Nature économique")
+    ws["A1"] = "Analyse de l'exécution par nature économique"
+    ws["A1"].font = Font(bold=True, size=13, color="1F4E78")
+    ws["A2"] = "Sources : " + " ; ".join(sorted({s for s in (n["source_depenses"], n["source_recettes"]) if s})) + "."
+    ws["A2"].font = POLICE_AUTO
+    ws["A3"] = a["lecture"]
+    ws["A3"].alignment = ENVELOPPE
+    ws.merge_cells("A3:K3")
+    ws.row_dimensions[3].height = 75
+    i = 5
+    ws.cell(i, 1, "Points d'attention").font = Font(bold=True)
+    for p in a["points"]:
+        i += 1
+        ws.cell(i, 1, {"critique": "Critique", "attention": "À examiner", "info": "Information"}[p["niveau"]])
+        ws.cell(i, 2, p["titre"]).font = Font(bold=True)
+        ws.cell(i, 3, p["detail"]).alignment = ENVELOPPE
+        ws.merge_cells(start_row=i, start_column=3, end_row=i, end_column=11)
+        ws.row_dimensions[i].height = 30
+    i += 2
+    if a["categories"]:
+        _ecrire_natures(ws, i, a["categories"], True)
+        i += 2 + sum(1 + len(c["natures"]) for c in a["categories"]) + 1
+    if a["recettes"]:
+        _ecrire_natures(ws, i + 1, a["recettes"], False)
+
+
+def _ecrire_natures(ws, i: int, groupes: list[dict], depenses: bool) -> None:
+    titres = (["Nature", "Libellé", "Crédits initiaux", "Crédits actuels", "Engagements", "Ordonnancements",
+               "Prises en charge", "Taux d'exécution (%)", "Statut", "Activités"] if depenses else
+              ["Nature", "Libellé", "Prévisions initiales", "Prévisions actuelles", "Recouvrements", "", "",
+               "Taux de recouvrement (%)", "Statut", ""])
+    ws.cell(i, 1, "Dépenses par nature économique" if depenses else "Recettes par nature économique").font = Font(bold=True)
+    _entetes(ws, i + 1, titres, [10, 55, 16, 16, 16, 16, 16, 12, 18, 10])
+    j = i + 1
+    for g in groupes:
+        j += 1
+        _ligne(ws, j, ["", g["libelle"], g.get("initial"), g.get("actuel"), g.get("engage") if depenses else g.get("realise"),
+                       g.get("realise") if depenses else None, g.get("paye") if depenses else None,
+                       round(g["taux"], 1) if g.get("taux") is not None else None, "", ""], BLEU)
+        for c in range(1, 11):
+            ws.cell(j, c).font = Font(bold=True)
+        for nat in g["natures"]:
+            j += 1
+            _ligne(ws, j, [nat["code"], nat["libelle"], nat.get("initial"), nat.get("actuel"),
+                           nat.get("engage") if depenses else nat.get("realise"),
+                           nat.get("realise") if depenses else None, nat.get("paye") if depenses else None,
+                           round(nat["taux"], 1) if nat.get("taux") is not None else None, nat["statut"],
+                           nat.get("activites") or "" if depenses else ""])
+            ws.cell(j, 9).fill = PatternFill("solid", fgColor=COULEURS_STATUT.get(nat["couleur"], GRIS))
+        for c in range(3, 8):
+            for r in range(i + 2, j + 1):
+                ws.cell(r, c).number_format = "# ##0"
+
+
 def _entetes(ws, ligne: int, titres: list[str], largeurs: list[int]):
     for j, (t, w) in enumerate(zip(titres, largeurs), start=1):
         c = ws.cell(ligne, j, t)
@@ -389,6 +455,7 @@ def ajouter_onglets_detail(wb: Workbook, res: ResultatAnalyse) -> None:
         _onglet_decret(wb, res)
     if res.situation:
         _onglet_situation(wb, res)
+    _onglet_natures(wb, res)
 
     # Tableaux extraits (pour vérification visuelle)
     ws = wb.create_sheet("Tableaux extraits")
@@ -618,6 +685,32 @@ def exporter_tableau_de_bord(donnees: dict, sortie: str | Path) -> Path:
                 ws3.cell(j, k, round(x["valeur"], 2))
     else:
         ws3.cell(2, 1, "Ratios non disponibles pour cette période (analyses à relancer avec la version 3.1).")
+    ws5 = wb.create_sheet("Natures économiques")
+    _entetes(ws5, 1, ["EPN", "Sens", "Nature", "Libellé", "Catégorie", "Crédits / prévisions actuels", "Engagements",
+                      "Ordonnancements / recouvrements", "Taux (%)", "Statut"], [34, 10, 10, 50, 22, 18, 16, 18, 10, 18])
+    from .natures import CATEGORIES, GROUPES_RECETTES, analyser as analyser_natures
+    from .historique import lister as lister_analyses
+    from .analyse import charger_parametres
+    j = 1
+    for rec in lister_analyses(donnees["periode"]["cle"]):
+        nat = rec["donnees"].get("natures") or {}
+        if not (nat.get("depenses") or nat.get("recettes")):
+            continue
+        a = analyser_natures(nat.get("depenses") or [], nat.get("recettes") or [], donnees["periode"]["rang"],
+                             charger_parametres())
+        for sens, groupes, libelles in (("Dépenses", a["categories"], dict(CATEGORIES)),
+                                        ("Recettes", a["recettes"], dict(GROUPES_RECETTES))):
+            for g in groupes:
+                for n in g["natures"]:
+                    j += 1
+                    _ligne(ws5, j, [rec["epn"], sens, n["code"], n["libelle"], libelles.get(g["code"], g["libelle"]),
+                                    n.get("actuel"), n.get("engage") if sens == "Dépenses" else None, n.get("realise"),
+                                    round(n["taux"], 1) if n.get("taux") is not None else None, n["statut"]])
+                    for c in (6, 7, 8):
+                        ws5.cell(j, c).number_format = "# ##0"
+                    ws5.cell(j, 10).fill = PatternFill("solid", fgColor=COULEURS_STATUT.get(n["couleur"], GRIS))
+    if j == 1:
+        ws5.cell(2, 1, "Analyse par nature économique non disponible pour cette période (analyses à relancer).")
     ws4 = wb.create_sheet("Difficultés-Suggestions")
     _entetes(ws4, 1, ["Type", "Catégorie", "EPN", "Texte du rapport", "Page"], [12, 32, 34, 110, 8])
     ds = donnees.get("difficultes") or {}

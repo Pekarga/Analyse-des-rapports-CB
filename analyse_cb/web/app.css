@@ -317,3 +317,10 @@ span.cite { margin-left: 4px; }
 .table-rapports td select { min-width: 270px; }
 .table-rapports td:nth-child(3) { min-width: 300px; }
 .carte-resultat:first-of-type { margin-top: 0; }
+
+/* ----------------------------------------------------------- nature économique */
+.points-natures .point { padding: 10px 2px; }
+.points-natures .point:last-child { border-bottom: 0; }
+.donnees tr.categorie td { background: #f3f6fb; font-weight: 700; }
+.donnees td.code { font-variant-numeric: tabular-nums; color: var(--encre-2); }
+.donnees tr.nature.supprimee td { color: var(--gris); }

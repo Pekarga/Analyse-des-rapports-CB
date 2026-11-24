@@ -41,6 +41,7 @@ L'outil est disponible sous forme d'**application Windows** : un installateur `A
 - **Analyse des rapports** : déposer les rapports (Word ou PDF, y compris scannés), saisir leur date de réception, ajouter si possible les décrets de création et les situations d'exécution (SIGOBE, Excel, CSV, PDF), puis **Lancer l'analyse**. Chaque rapport donne son fichier d'analyse Excel (grille de la DCB rédigée) et alimente le tableau de bord ;
 - **Comparaison budgétaire** : recettes et dépenses prévues et réalisées par EPN, prévu / réalisé par nature de dépense et évolution du taux d'exécution d'une période à l'autre ;
 - **Analyse des ratios** : ratios du canevas (ressources propres, dépenses de personnel, de fonctionnement, d'investissement, d'abonnement) par EPN et pour l'ensemble, calculés sur la situation d'exécution (SIGOBE) lorsqu'elle est fournie, sinon sur les tableaux du rapport ; valeurs citées par le CB et concordance avec ses tableaux ; structure des dépenses ; lecture rédigée des ratios de chaque EPN ; évolution d'une période à l'autre ;
+- **Nature économique** : exécution des dépenses et des recettes nature par nature (code à 6 chiffres), pour un EPN ou pour l'ensemble des EPN de la période, à partir de la situation d'exécution SIGOBE (lignes cumulées sur les activités), à défaut des tableaux du rapport : crédits initiaux et actuels, engagements, ordonnancements, taux et statut (« Dépassement », « Non engagé », « Crédits supprimés »…), points d'attention (natures sans engagement, reste à payer, crédits réduits par la régulation, concentration, natures d'investissement inscrites dans une autre catégorie), lecture rédigée, principales natures. Le fichier d'analyse de chaque rapport comporte un onglet « Nature économique » et l'export du tableau de bord un onglet « Natures économiques » ;
 - **Alertes & Anomalies** : rapports à retourner au CB, textes de création mal cités, montants contredits par la situation d'exécution, régulation non répercutée, Conseil de gestion non réuni, dépassements et sous-exécutions… ;
 - **Rapports détaillés** : historique des analyses ; un clic ouvre l'appréciation générale, les alertes, les principaux constats et les montants retenus du rapport, ainsi que son fichier Excel ;
 - **Paramètres** : profil (nom, fonction), institution et logo affichés dans la barre latérale, dossier des résultats, dates limites de transmission, seuils d'appréciation et d'exécution.
@@ -185,6 +186,7 @@ analyse_cb/
   historique.py  historique des analyses (base SQLite locale) et indicateurs de chaque rapport
   tableau.py     indicateurs du tableau de bord (taux, statuts, écarts, ratios, difficultés, alertes, synthèse)
   ratios.py      ratios de gestion du canevas : calcul, agrégation, lecture rédigée
+  natures.py     analyse de l'exécution par nature économique (statuts, points d'attention, lecture)
   serveur.py     serveur local de l'application (interface et API)
   web/           interface de l'application (HTML, CSS, JavaScript, sans dépendance externe)
   interface.py   lanceur de l'application (Edge en mode application, ou navigateur) et durée de vie

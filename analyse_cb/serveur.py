@@ -421,6 +421,8 @@ class Gestionnaire(BaseHTTPRequestHandler):
                 return self._json(tableau.tableau_de_bord(q.get("periode"), parametres_effectifs()))
             if chemin == "/api/comparaison":
                 return self._json(tableau.comparaison(q.get("periode"), parametres_effectifs()))
+            if chemin == "/api/natures":
+                return self._json(tableau.analyse_natures(q.get("periode"), q.get("epn"), parametres_effectifs()))
             if chemin == "/api/ratios":
                 return self._json(tableau.analyse_ratios(q.get("periode")))
             if chemin == "/api/alertes":
@@ -441,6 +443,13 @@ class Gestionnaire(BaseHTTPRequestHandler):
                     return self._erreur("Analyse introuvable.", 404)
                 r["periode"] = historique.libelle_periode(r["periode_cle"])
                 r["fichier_existe"] = Path(r["fichier_analyse"]).exists()
+                nat = r["donnees"].get("natures") or {}
+                if nat.get("depenses") or nat.get("recettes"):
+                    from .natures import analyser as analyser_natures
+                    a = analyser_natures(nat.get("depenses") or [], nat.get("recettes") or [], r["rang"],
+                                         parametres_effectifs())
+                    r["natures_resume"] = {"natures": a["natures"], "points": len(a["points"]), "lecture": a["lecture"],
+                                           "critiques": sum(1 for p in a["points"] if p["niveau"] != "info")}
                 info = r["donnees"].get("ratios") or {}
                 if info.get("liste"):
                     from .ratios import lecture

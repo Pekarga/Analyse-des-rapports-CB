@@ -9,7 +9,7 @@ de la période (25 % au 1er trimestre, 50 % au 30 juin, 75 % au 3e trimestre, 10
 """
 from __future__ import annotations
 
-from . import ratios
+from . import natures, ratios
 from .historique import NATURES, libelle_periode, lister, periodes
 
 TAUX_ATTENDU = {1: 25.0, 2: 50.0, 3: 75.0, 4: 100.0, 5: 100.0}
@@ -210,6 +210,33 @@ def _ratios_periode(records: list[dict], precedents: list[dict]) -> dict:
     sources = sorted({(r["donnees"].get("ratios") or {}).get("source") for r in records} - {None})
     return {"agreges": agreges, "citations": ratios.citations(records), "bases": bases, "sources": sources,
             "disponibles": sum(1 for r in records if ratios.liste(r)), "rapports": len(records)}
+
+
+def analyse_natures(periode_cle: str | None, choix: str | None, parametres: dict) -> dict:
+    """Page « Nature économique » : un EPN ou l'ensemble des EPN de la période (natures cumulées par code)."""
+    liste = periodes()
+    if not liste:
+        return {"vide": True, "periodes": []}
+    if not periode_cle or periode_cle not in {p["cle"] for p in liste}:
+        periode_cle = liste[0]["cle"]
+    p = next(x for x in liste if x["cle"] == periode_cle)
+    records = lister(periode_cle)
+    avec = [r for r in records if (r["donnees"].get("natures") or {}).get("depenses")
+            or (r["donnees"].get("natures") or {}).get("recettes")]
+    epns = [{"id": r["id"], "court": _nom_court(r), "epn": r["epn"]} for r in avec]
+    choisis = [r for r in avec if str(r["id"]) == str(choix)] or avec
+    choix = str(choisis[0]["id"]) if len(choisis) == 1 else "tous"
+    donnees = [r["donnees"]["natures"] for r in choisis]
+    depenses = natures.fusionner([d.get("depenses") or [] for d in donnees]) if len(donnees) > 1 else \
+        (donnees[0].get("depenses") or [] if donnees else [])
+    recettes = natures.fusionner([d.get("recettes") or [] for d in donnees]) if len(donnees) > 1 else \
+        (donnees[0].get("recettes") or [] if donnees else [])
+    sources = sorted({s for d in donnees for s in (d.get("source_depenses"), d.get("source_recettes")) if s})
+    valeurs = [depenses and max((n.get("actuel") or 0) for n in depenses) or 0,
+               recettes and max((n.get("actuel") or 0) for n in recettes) or 0]
+    return {"vide": False, "periodes": liste, "periode": p, "epns": epns, "choix": choix,
+            "a_reanalyser": len(records) - len(avec), "sources": sources, "unite": unite(valeurs),
+            **natures.analyser(depenses, recettes, p["rang"], parametres)}
 
 
 CATEGORIES_DS = (("execution", "Exécution du budget"), ("controle", "Contrôle de l'exécution du budget"),
