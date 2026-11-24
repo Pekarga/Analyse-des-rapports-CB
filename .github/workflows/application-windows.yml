@@ -77,6 +77,7 @@ jobs:
           Write-Host "Interface vérifiée."
 
       - name: Vérification de la fenêtre de l'application (Edge WebView2)
+        id: fenetre
         continue-on-error: true
         timeout-minutes: 5
         shell: pwsh
@@ -85,6 +86,12 @@ jobs:
           Get-Content test_fenetre.txt -ErrorAction SilentlyContinue
           if ($p.ExitCode -ne 0) { throw "Fenêtre non vérifiée sur cette machine (code $($p.ExitCode))." }
           Write-Host "Fenêtre de l'application vérifiée."
+
+      # Étape témoin : « réussie » seulement si la fenêtre a bien affiché l'interface (sinon « ignorée »).
+      - name: Fenêtre de l'application vérifiée (interface affichée par Edge WebView2)
+        if: steps.fenetre.outcome == 'success'
+        shell: pwsh
+        run: Write-Host "La fenêtre de l'application affiche l'interface."
 
       - name: Vérification de l'OCR intégré (décret d'exemple « scanné »)
         shell: pwsh
