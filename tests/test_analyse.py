@@ -669,6 +669,16 @@ def test_analyse_par_nature_economique():
     assert next(x for x in cumul if x["code"] == "601100")["actuel"] == 30
 
 
+def test_icone_application():
+    """Icône Windows en 7 tailles (16 à 256 pixels) et image de la fenêtre (256 pixels), tirées de la bannière."""
+    from PIL import Image
+    ico = Image.open(RACINE / "packaging" / "icone.ico")
+    assert {(t, t) for t in (16, 24, 32, 48, 64, 128, 256)} <= set(ico.info["sizes"])
+    png = Image.open(RACINE / "packaging" / "icone.png")
+    assert png.size == (256, 256) and png.mode == "RGBA" and png.getpixel((0, 0))[3] == 0  # fond transparent
+    assert (RACINE / "packaging" / "banniere.jpg").exists()
+
+
 def test_statut_execution_selon_periode():
     from analyse_cb.tableau import statut_execution
     p = {"execution": {"seuil_vigilance": 10, "seuil_sous_execution": 20}}

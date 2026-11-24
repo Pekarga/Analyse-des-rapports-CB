@@ -110,7 +110,7 @@ async function majEnvironnement() {
     document.getElementById("inst2").textContent = e.institution.ligne2 || "";
     document.getElementById("logo").innerHTML = e.logo
       ? `<img src="/api/logo?jeton=${encodeURIComponent(JETON)}&t=${Date.now()}" alt="Logo de l'institution">`
-      : `<div class="logo-defaut">${icone("analyse", 'style="width:40px;height:40px"')}</div>`;
+      : `<img src="/favicon.ico" alt="Analyse des rapports des CB">`;
     document.getElementById("profil-nom").textContent = e.utilisateur.nom || "Profil à compléter";
     document.getElementById("profil-role").textContent = e.utilisateur.fonction || "Chargé d'Études";
     document.getElementById("avatar").textContent = e.utilisateur.nom ? initiales(e.utilisateur.nom) : "";
@@ -1071,7 +1071,7 @@ async function pageParametres() {
       <div class="panneau section-param"><h2>${icone("utilisateur")}Profil</h2><div class="ligne-champs">${c("utilisateur", "nom", "Nom et prénoms")}${c("utilisateur", "fonction", "Fonction", "Ex. Chargé d'Études, Analyste budgétaire")}</div></div>
       <div class="panneau section-param"><h2>${icone("accueil")}Institution</h2><div class="ligne-champs">${c("institution", "ligne1", "Ministère / direction")}${c("institution", "ligne2", "Deuxième ligne", "Ex. Côte d'Ivoire")}</div>
         <div style="display:flex;gap:16px;align-items:center;margin-top:14px"><div class="apercu-logo" id="apercu-logo"></div>
-        <div><div style="font-weight:600">Logo affiché dans la barre latérale</div><div class="aide" style="margin:2px 0 8px">Image PNG, JPG ou SVG (logo officiel de l'institution).</div>
+        <div><div style="font-weight:600">Logo affiché dans la barre latérale</div><div class="aide" style="margin:2px 0 8px">Image PNG, JPG ou SVG (logo officiel de l'institution). Sans logo, l'icône de l'application est affichée.</div>
         <div style="display:flex;gap:8px"><button class="bouton" id="choisir-logo">${icone("depot")}Choisir une image</button><button class="bouton" id="retirer-logo">Retirer</button></div><div id="depot-logo" hidden></div></div></div></div>
       <div class="panneau section-param"><h2>${icone("dossier")}Analyse</h2>
         <div class="champ"><label for="sortie-param">Dossier des résultats</label><input id="sortie-param" value="${esc(p.sortie)}"></div>
@@ -1090,7 +1090,7 @@ async function pageParametres() {
         <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="bouton" data-ouvrir="referentiel">Référentiel des EPN</button><button class="bouton" data-ouvrir="parametres">Fichier des paramètres</button><button class="bouton" data-ouvrir="dossier_parametres">Dossier des paramètres</button><button class="bouton" data-ouvrir="journal">Journal de l'application</button></div>
         <p class="aide" style="margin:10px 0 0">Lecture des documents scannés : ${etat.app && etat.app.ocr.ok ? "disponible" : "indisponible – " + esc(etat.app ? etat.app.ocr.message : "")}.<br>Historique des analyses : ${esc(p.fichiers.historique)}</p></div>
     </div></div>`;
-  const majLogo = () => { document.getElementById("apercu-logo").innerHTML = etat.app && etat.app.logo ? `<img src="/api/logo?jeton=${encodeURIComponent(JETON)}&t=${Date.now()}" alt="">` : icone("analyse", 'style="width:40px;height:40px;color:#fff"'); };
+  const majLogo = () => { document.getElementById("apercu-logo").innerHTML = etat.app && etat.app.logo ? `<img src="/api/logo?jeton=${encodeURIComponent(JETON)}&t=${Date.now()}" alt="">` : `<img src="/favicon.ico" alt="">`; };
   majLogo();
   const depot = document.getElementById("depot-logo");
   depot.className = "depot"; depot.id = "zone-logo";
