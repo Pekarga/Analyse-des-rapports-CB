@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import traceback
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -25,7 +26,7 @@ from . import __version__, historique, tableau
 from .analyse import InfosRapport, analyser, charger_decrets, charger_parametres, charger_situations
 from .analyse import PARAMETRES_DEFAUT, REFERENTIEL_DEFAUT
 from .controles import lire_date
-from .ressources import dossier_ressources, dossier_utilisateur
+from .ressources import dossier_local, dossier_ressources, dossier_utilisateur
 
 EXT_ACCEPTEES = {"rapport": (".docx", ".pdf"), "decret": (".pdf", ".docx", ".txt"),
                  "situation": (".xlsx", ".xlsm", ".csv", ".pdf", ".docx"), "logo": (".png", ".jpg", ".jpeg", ".gif", ".svg")}
@@ -87,7 +88,7 @@ def ouvrir_systeme(chemin: Path) -> None:
 class Application:
     def __init__(self):
         self.jeton = secrets.token_urlsafe(18)
-        self.depot = dossier_utilisateur() / "documents"
+        self.depot = dossier_local() / "documents"
         self.depot.mkdir(parents=True, exist_ok=True)
         self.fichiers: dict[str, dict] = {}
         self.travail: dict | None = None
@@ -95,6 +96,11 @@ class Application:
         self.arret = threading.Event()
         self.quitter = threading.Event()
         self.interface_chargee = threading.Event()  # l'interface a interrogé le serveur (affichage effectif)
+        # Fenêtres de l'interface ouvertes : identifiant de page → dernier signe de vie (voir interface.py)
+        self.pages: dict[str, float] = {}
+        self.verrou_pages = threading.Lock()
+        self.dernier_signe = 0.0
+        self.derniere_fermeture = 0.0
 
     # -- fichiers déposés depuis l'interface
     def deposer(self, nom: str, categorie: str, contenu: bytes) -> dict:
@@ -117,6 +123,33 @@ class Application:
         chemin.write_bytes(contenu)
         self.fichiers[ident] = {"chemin": chemin, "nom": nom, "categorie": categorie, "taille": len(contenu)}
         return {"id": ident, "nom": nom, "taille": len(contenu)}
+
+    # -- fenêtres de l'interface (présence régulière, signal de fermeture)
+    def presence(self, page: str) -> None:
+        with self.verrou_pages:
+            nouvelle = page not in self.pages
+            self.pages[page] = self.dernier_signe = time.time()
+        if nouvelle:
+            JOURNAL.info("Fenêtre de l'interface affichée.")
+        self.interface_chargee.set()
+
+    def fermeture(self, page: str) -> None:
+        with self.verrou_pages:
+            self.pages.pop(page, None)
+            self.derniere_fermeture = self.dernier_signe = time.time()
+        JOURNAL.info("Fenêtre de l'interface fermée.")
+
+    def pages_ouvertes(self, delai: float) -> int:
+        """Nombre de fenêtres ayant donné signe de vie depuis moins de `delai` secondes."""
+        t = time.time()
+        with self.verrou_pages:
+            for page, vu in list(self.pages.items()):
+                if t - vu > delai:
+                    del self.pages[page]
+            return len(self.pages)
+
+    def analyse_en_cours(self) -> bool:
+        return bool(self.travail and self.travail.get("en_cours"))
 
     def logo(self) -> Path | None:
         return next(iter(sorted(dossier_utilisateur().glob("logo.*"))), None)
@@ -443,6 +476,13 @@ class Gestionnaire(BaseHTTPRequestHandler):
                 if data.get("ouvrir", True):
                     ouvrir_systeme(Path(chemin))
                 return self._json({"chemin": chemin})
+            page = (parse_qs(req.query).get("page") or ["?"])[0][:64]
+            if req.path == "/api/presence":
+                self.app.presence(page)
+                return self._json({"quitter": self.app.quitter.is_set()})
+            if req.path == "/api/fermeture":
+                self.app.fermeture(page)
+                return self._json({"ok": True})
             if req.path == "/api/journal":  # erreurs relevées par l'interface
                 JOURNAL.error("Interface : %s", str(data.get("message", ""))[:2000])
                 return self._json({"ok": True})
@@ -488,7 +528,7 @@ class Serveur:
 def nettoyer_depot(jours: int = 30) -> None:
     """Supprime les documents déposés depuis plus de `jours` jours."""
     import time
-    depot = dossier_utilisateur() / "documents"
+    depot = dossier_local() / "documents"
     if not depot.is_dir():
         return
     limite = time.time() - jours * 86400

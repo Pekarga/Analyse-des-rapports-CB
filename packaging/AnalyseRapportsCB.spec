@@ -21,9 +21,8 @@ a = Analysis(
     datas=datas,
     hiddenimports=["analyse_cb.interface", "analyse_cb.__main__", "analyse_cb.serveur", "analyse_cb.historique",
                    "analyse_cb.tableau", "pytesseract", "cv2", "numpy", "numpy.core.multiarray"]
-                  + collect_submodules("numpy.core") + collect_submodules("numpy._core")
-                  + collect_submodules("webview", filter=lambda m: ".platforms." not in m or m.endswith(("winforms", "edgechromium", "mshtml"))),
-    excludes=["streamlit", "pandas", "matplotlib", "IPython", "pytest"],
+                  + collect_submodules("numpy.core") + collect_submodules("numpy._core"),
+    excludes=["streamlit", "pandas", "matplotlib", "IPython", "pytest", "webview", "clr", "pythonnet"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

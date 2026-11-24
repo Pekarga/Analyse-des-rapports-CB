@@ -9,4 +9,4 @@ from .analyse import InfosRapport, ResultatAnalyse, analyser, charger_parametres
 from .excel import remplir_modele, tableau_de_bord
 
 __all__ = ["analyser", "remplir_modele", "tableau_de_bord", "InfosRapport", "ResultatAnalyse", "charger_parametres"]
-__version__ = "3.0.1"
+__version__ = "3.0.2"

@@ -30,6 +30,17 @@ def dossier_utilisateur() -> Path:
     return d
 
 
+def dossier_local() -> Path:
+    """Dossier des données volumineuses propres au poste (documents déposés, profil d'affichage) : %LOCALAPPDATA%,
+    qui n'est pas synchronisé avec les profils itinérants, à défaut le dossier de l'utilisateur."""
+    base = os.environ.get("LOCALAPPDATA")
+    if not base:
+        return dossier_utilisateur()
+    d = Path(base) / NOM_APPLICATION
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def fichier_config(nom: str) -> Path:
     """config/<nom> : en développement, le fichier du dépôt ; dans l'application, une copie modifiable dans le
     profil de l'utilisateur (créée au premier lancement à partir de la version fournie)."""

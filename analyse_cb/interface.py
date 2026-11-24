@@ -2,24 +2,29 @@
 
 Lancement : python -m analyse_cb.interface  (ou AnalyseRapportsCB.exe dans la version Windows)
 
-L'interface (tableau de bord, analyse des rapports, alertes…) est servie par un petit serveur local (127.0.0.1)
-et s'affiche :
-- sous Windows, dans une fenêtre de l'application (moteur Microsoft Edge WebView2, présent sur Windows 10 et 11) ;
-- à défaut, dans le navigateur par défaut, une petite fenêtre permettant alors de la rouvrir ou de quitter.
-Si l'interface ne s'est pas affichée dans la fenêtre au bout de quelques secondes, l'application bascule d'elle-même
-sur le navigateur. Le déroulement est consigné dans le journal %APPDATA%\\AnalyseRapportsCB\\journal.txt.
+L'interface (tableau de bord, analyse des rapports, alertes…) est servie par un petit serveur local (127.0.0.1,
+jeton propre à chaque lancement). Elle s'affiche dans une fenêtre de Microsoft Edge en mode « application » (sans
+barre d'adresse ni onglets, avec un profil propre à l'application), à défaut de Google Chrome, à défaut du navigateur
+par défaut. Ce sont les navigateurs déjà utilisés sur le poste : aucun composant d'affichage n'est embarqué.
+
+L'application reste ouverte tant qu'une fenêtre de l'interface l'est : chaque fenêtre signale régulièrement sa
+présence et prévient de sa fermeture. Une seconde ouverture de l'application ouvre une nouvelle fenêtre sur la même
+instance. Le déroulement est consigné dans %APPDATA%\\AnalyseRapportsCB\\journal.txt.
 
 Options :
-  --ligne-de-commande …    analyse en ligne de commande (mêmes options que « python -m analyse_cb »)
-  --navigateur             affiche l'interface dans le navigateur par défaut
-  --test-serveur [fichier] vérifie le serveur et l'interface, écrit le résultat dans « fichier » (code 0 si tout va bien)
-  --test-fenetre [fichier] ouvre la fenêtre comme au lancement normal, vérifie l'affichage de l'interface, la referme
-  --test-repli [fichier]   vérifie la bascule automatique vers le navigateur quand la fenêtre n'affiche rien
+  --ligne-de-commande …       analyse en ligne de commande (mêmes options que « python -m analyse_cb »)
+  --navigateur                affiche l'interface dans le navigateur par défaut
+  --test-serveur [fichier]    vérifie le serveur et l'interface ; résultat écrit dans « fichier » (code 0 si tout va bien)
+  --test-affichage [fichier]  ouvre la fenêtre comme au lancement normal, vérifie l'affichage, puis quitte
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
+import re
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -29,17 +34,14 @@ import webbrowser
 from pathlib import Path
 
 from . import __version__
-from .ressources import dossier_utilisateur
+from .ressources import dossier_local, dossier_utilisateur
 
 TITRE = "Analyse des rapports des Contrôleurs Budgétaires"
-CLE_WEBVIEW2 = r"SOFTWARE\{}Microsoft\EdgeUpdate\Clients\{{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}}"
-# Paramètres de webview.start(), identiques au lancement normal et lors des vérifications : mode privé par défaut
-# (dossier de données temporaire). Ne pas passer « storage_path » : avec pywebview 5.4, cette option emprunte une
-# autre initialisation de WebView2 qui peut échouer sans erreur visible (fenêtre restée vide).
-OPTIONS_FENETRE = {"gui": "edgechromium"}
-DELAI_AFFICHAGE = 25  # secondes accordées à l'interface pour s'afficher dans la fenêtre avant la bascule
+DELAI_PREMIER_AFFICHAGE = 45  # secondes pour que l'interface s'affiche, avant d'essayer le navigateur par défaut
+DELAI_PRESENCE = 180          # une fenêtre sans signe de vie depuis ce délai est tenue pour fermée
+DELAI_FERMETURE = 5           # délai de grâce après une fermeture (rechargement de la page)
+DELAI_ABANDON = 1800          # sans aucun signe de vie de l'interface pendant ce délai, l'application s'arrête
 JOURNAL = logging.getLogger("analyse_cb")
-_fenetre_active = None
 
 
 def configurer_journal() -> Path | None:
@@ -63,25 +65,155 @@ def configurer_journal() -> Path | None:
         return None
 
 
-def version_webview2() -> str:
-    """Version du moteur Microsoft Edge WebView2 installé (Windows uniquement), chaîne vide s'il est absent."""
-    if not sys.platform.startswith("win"):
-        return ""
+# ------------------------------------------------------------------ navigateurs
+def _chemin_app_paths(exe: str) -> str:
+    """Chemin d'un programme déclaré dans le registre Windows (App Paths)."""
     import winreg
-    for racine, sous in ((winreg.HKEY_LOCAL_MACHINE, "WOW6432Node\\"), (winreg.HKEY_LOCAL_MACHINE, ""),
-                         (winreg.HKEY_CURRENT_USER, "")):
+    for racine in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
         try:
-            with winreg.OpenKey(racine, CLE_WEBVIEW2.format(sous)) as cle:
-                version, _ = winreg.QueryValueEx(cle, "pv")
-                if version and version != "0.0.0.0":
-                    return str(version)
+            with winreg.OpenKey(racine, rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{exe}") as cle:
+                valeur, _ = winreg.QueryValueEx(cle, None)
+                if valeur and Path(valeur.strip('"')).is_file():
+                    return valeur.strip('"')
         except OSError:
             continue
     return ""
 
 
-def webview2_installe() -> bool:
-    return bool(version_webview2())
+def navigateurs() -> list[tuple[str, str]]:
+    """Navigateurs capables d'afficher l'interface en mode « application » : (nom, exécutable), par préférence.
+    La variable ANALYSE_CB_NAVIGATEUR impose un exécutable (dépannage, vérifications)."""
+    impose = os.environ.get("ANALYSE_CB_NAVIGATEUR")
+    if impose:
+        return [("Navigateur imposé", impose)]
+    out: list[tuple[str, str]] = []
+    if sys.platform.startswith("win"):
+        programmes = [os.environ.get(v, "") for v in ("ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA")]
+        for nom, exe, sous in (("Microsoft Edge", "msedge.exe", r"Microsoft\Edge\Application"),
+                               ("Google Chrome", "chrome.exe", r"Google\Chrome\Application")):
+            chemin = _chemin_app_paths(exe) or next(
+                (str(Path(p) / sous / exe) for p in programmes if p and (Path(p) / sous / exe).is_file()), "")
+            if chemin:
+                out.append((nom, chemin))
+    else:
+        for nom, commande in (("Microsoft Edge", "microsoft-edge"), ("Google Chrome", "google-chrome"),
+                              ("Chromium", "chromium"), ("Chromium", "chromium-browser")):
+            chemin = shutil.which(commande)
+            if chemin and all(chemin != c for _, c in out):
+                out.append((nom, chemin))
+    return out
+
+
+class Affichage:
+    """Fenêtre de l'interface : navigateur en mode application (profil propre à l'application) ou navigateur
+    par défaut."""
+
+    def __init__(self, url: str):
+        self.url = url
+        self.processus: subprocess.Popen | None = None
+        self.mode = ""
+
+    def commande(self, nom: str, exe: str) -> list[str]:
+        profil = dossier_local() / "affichage" / re.sub(r"\W+", "_", nom)
+        options = ["--no-first-run", "--no-default-browser-check", "--disable-session-crashed-bubble",
+                   "--hide-crash-restore-bubble", "--window-size=1440,900"]
+        options += os.environ.get("ANALYSE_CB_NAVIGATEUR_OPTIONS", "").split()
+        return [exe, f"--user-data-dir={profil}", *options, f"--app={self.url}"]
+
+    def ouvrir(self, navigateur_defaut: bool = False) -> str:
+        if not navigateur_defaut:
+            for nom, exe in navigateurs():
+                try:
+                    self.processus = subprocess.Popen(self.commande(nom, exe), stdin=subprocess.DEVNULL,
+                                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    self.mode = nom
+                    JOURNAL.info("Interface ouverte avec %s en mode application (%s).", nom, exe)
+                    return nom
+                except OSError:
+                    JOURNAL.exception("Lancement de %s impossible.", nom)
+        self.mode = "navigateur par défaut"
+        JOURNAL.info("Interface ouverte dans le navigateur par défaut.")
+        try:
+            webbrowser.open(self.url)
+        except Exception:
+            JOURNAL.exception("Ouverture du navigateur par défaut impossible.")
+        return self.mode
+
+    def processus_actif(self) -> bool:
+        return self.processus is not None and self.processus.poll() is None
+
+    def fermer(self, attente: float = 3) -> None:
+        """Ferme la fenêtre ouverte par l'application si elle ne s'est pas fermée d'elle-même."""
+        if not self.processus_actif():
+            return
+        try:
+            self.processus.wait(attente)
+        except subprocess.TimeoutExpired:
+            try:
+                self.processus.terminate()
+                self.processus.wait(5)
+            except Exception:
+                JOURNAL.exception("Fermeture de la fenêtre impossible.")
+
+
+# ------------------------------------------------------------------ durée de vie de l'application
+def attendre_fin(serveur, affichage: Affichage, delai_affichage: float | None = None) -> str:
+    """Attend la fin de l'utilisation : « quitter » (bouton de l'interface), « fermee » (plus aucune fenêtre ouverte)
+    ou « non_affichee » (l'interface ne s'est pas affichée dans le délai)."""
+    app = serveur.app
+    delai_affichage = DELAI_PREMIER_AFFICHAGE if delai_affichage is None else delai_affichage
+    debut = time.time()
+    while True:
+        if app.quitter.wait(0.5):
+            return "quitter"
+        t = time.time()
+        if not app.interface_chargee.is_set():
+            if t - debut > delai_affichage:
+                return "non_affichee"
+            continue
+        if app.pages_ouvertes(DELAI_PRESENCE) or app.analyse_en_cours():
+            continue
+        if t - app.dernier_signe < DELAI_FERMETURE:  # rechargement de la page en cours
+            continue
+        if app.derniere_fermeture and app.derniere_fermeture >= app.dernier_signe:
+            return "fermee"
+        # Plus de signe de vie sans signal de fermeture : fenêtre réduite (minuteries ralenties) ou fermée.
+        if affichage.processus_actif() and t - app.dernier_signe < DELAI_ABANDON:
+            continue
+        return "fermee"
+
+
+# ------------------------------------------------------------------ instance déjà ouverte
+def _fichier_instance() -> Path:
+    return dossier_utilisateur() / "instance.json"
+
+
+def instance_active() -> str:
+    """Adresse de l'instance déjà ouverte de l'application, s'il y en a une qui répond."""
+    try:
+        url = json.loads(_fichier_instance().read_text(encoding="utf-8"))["url"]
+        jeton = url.split("jeton=", 1)[1]
+        base = url.split("/?", 1)[0]
+        req = urllib.request.Request(base + "/api/parametres", headers={"X-Jeton": jeton})
+        with urllib.request.urlopen(req, timeout=3) as r:  # noqa: S310 - adresse locale
+            return url if r.status == 200 else ""
+    except Exception:
+        return ""
+
+
+def _enregistrer_instance(serveur) -> None:
+    try:
+        _fichier_instance().write_text(json.dumps({"url": serveur.url, "pid": os.getpid()}), encoding="utf-8")
+    except OSError:
+        JOURNAL.exception("Enregistrement de l'instance impossible.")
+
+
+def _oublier_instance(serveur) -> None:
+    try:
+        if json.loads(_fichier_instance().read_text(encoding="utf-8")).get("url") == serveur.url:
+            _fichier_instance().unlink()
+    except Exception:
+        pass
 
 
 def demarrer_serveur():
@@ -96,140 +228,49 @@ def demarrer_serveur():
     return serveur
 
 
-# ------------------------------------------------------------------ fenêtre de l'application (WebView2)
-def fenetre_native(serveur, url: str | None = None, delai: float = DELAI_AFFICHAGE) -> str:
-    """Affiche l'interface dans une fenêtre de l'application.
-
-    Renvoie « ok » (fenêtre fermée normalement), « repli » (l'interface ne s'est pas affichée à temps : la fenêtre a
-    été refermée) ou « indisponible » (fenêtre impossible sur ce poste)."""
-    global _fenetre_active
-    version = version_webview2()
-    if not version:
-        JOURNAL.warning("Moteur Microsoft Edge WebView2 introuvable : affichage dans le navigateur.")
-        return "indisponible"
-    try:
-        import webview
-    except Exception:
-        JOURNAL.exception("Module d'affichage (pywebview) indisponible.")
-        return "indisponible"
-    JOURNAL.info("Ouverture de la fenêtre (WebView2 %s, pywebview %s).", version, getattr(webview, "__version__", "?"))
-    issue = {"repli": False}
-    try:
-        fenetre = webview.create_window(TITRE, url or serveur.url, width=1440, height=900, min_size=(1100, 700),
-                                        background_color="#F3F6FA", text_select=True)
-        _fenetre_active = fenetre
-
-        def fermer_sur_demande():  # « Quitter l'application » depuis l'interface
-            serveur.app.quitter.wait()
-            try:
-                fenetre.destroy()
-            except Exception:
-                pass
-        threading.Thread(target=fermer_sur_demande, daemon=True).start()
-
-        def surveiller_affichage():  # bascule sur le navigateur si l'interface ne s'affiche pas
-            if serveur.app.interface_chargee.wait(delai):
-                JOURNAL.info("Interface affichée dans la fenêtre de l'application.")
-                return
-            if serveur.app.quitter.is_set():
-                return
-            JOURNAL.error("L'interface ne s'est pas affichée dans la fenêtre au bout de %s s : "
-                          "bascule sur le navigateur.", delai)
-            issue["repli"] = True
-            try:
-                fenetre.destroy()
-            except Exception:
-                JOURNAL.exception("Fermeture de la fenêtre impossible.")
-        threading.Thread(target=surveiller_affichage, daemon=True).start()
-
-        def avant_fermeture(window):  # renvoyer False annule la fermeture de la fenêtre
-            travail = serveur.app.travail
-            if issue["repli"] or serveur.app.quitter.is_set() or not (travail and travail.get("en_cours")):
-                return True
-            return bool(window.create_confirmation_dialog(
-                TITRE, "Une analyse est en cours. Quitter quand même l'application ?"))
-        try:
-            fenetre.events.closing += avant_fermeture
-        except Exception:
-            JOURNAL.exception("Confirmation de fermeture indisponible.")
-        webview.start(**OPTIONS_FENETRE)
-    except Exception:
-        JOURNAL.exception("Échec de la fenêtre de l'application.")
-        return "repli" if issue["repli"] else "indisponible"
-    finally:
-        _fenetre_active = None
-    JOURNAL.info("Fenêtre de l'application fermée%s.", " (bascule sur le navigateur)" if issue["repli"] else "")
-    return "repli" if issue["repli"] else "ok"
-
-
-# ------------------------------------------------------------------ repli : navigateur par défaut
-def fenetre_navigateur(serveur, repli: bool = False) -> None:
-    """Ouvre l'interface dans le navigateur ; une petite fenêtre permet de la rouvrir ou de quitter."""
-    JOURNAL.info("Affichage de l'interface dans le navigateur par défaut.")
-    try:
-        webbrowser.open(serveur.url)
-    except Exception:
-        JOURNAL.exception("Ouverture du navigateur impossible.")
-    try:
-        import tkinter as tk
-        from tkinter import ttk
-    except Exception:
-        tk = None
-    if tk is None:
-        try:
-            serveur.app.quitter.wait()
-        except KeyboardInterrupt:
-            pass
-        return
+def message(texte: str, erreur: bool = True) -> None:
+    """Boîte de message Windows (sans dépendance), sinon simple trace dans le journal."""
+    JOURNAL.info("Message affiché : %s", texte.replace("\n", " "))
     if sys.platform.startswith("win"):
-        try:  # affichage net sur les écrans à haute résolution
-            import ctypes
-            ctypes.windll.shcore.SetProcessDpiAwareness(1)
-        except Exception:
-            pass
-    try:
-        racine = tk.Tk()
-    except Exception:  # pas d'affichage graphique
         try:
-            serveur.app.quitter.wait()
-        except KeyboardInterrupt:
-            pass
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(0, texte, TITRE, (0x10 if erreur else 0x40) | 0x40000)
+        except Exception:
+            JOURNAL.exception("Boîte de message impossible.")
+
+
+def lancer(navigateur_defaut: bool = False) -> None:
+    url = instance_active()
+    if url:  # application déjà ouverte : nouvelle fenêtre sur la même instance
+        JOURNAL.info("Application déjà ouverte : nouvelle fenêtre.")
+        Affichage(url).ouvrir(navigateur_defaut)
         return
-    racine.title(TITRE)
-    racine.resizable(False, False)
+    serveur = demarrer_serveur()
+    _enregistrer_instance(serveur)
+    affichage = Affichage(serveur.url)
     try:
-        from .ressources import dossier_ressources
-        racine.iconphoto(True, tk.PhotoImage(file=str(dossier_ressources() / "packaging" / "icone.png")))
-    except Exception:
-        pass
-    cadre = ttk.Frame(racine, padding=18)
-    cadre.pack(fill="both", expand=True)
-    ttk.Label(cadre, text=TITRE, font=("Segoe UI", 12, "bold")).pack(anchor="w")
-    message = ("L'application est ouverte dans votre navigateur internet.\n"
-               "Gardez cette fenêtre ouverte pendant son utilisation.")
-    if repli:
-        message = ("L'affichage dans la fenêtre de l'application n'a pas fonctionné sur ce poste :\n"
-                   "l'application est ouverte dans votre navigateur internet.\n"
-                   "Gardez cette fenêtre ouverte pendant son utilisation.\n\n"
-                   f"Détail technique : {dossier_utilisateur() / 'journal.txt'}")
-    ttk.Label(cadre, text=message, justify="left").pack(anchor="w", pady=(6, 12))
-    boutons = ttk.Frame(cadre)
-    boutons.pack(fill="x")
-
-    def quitter():
+        affichage.ouvrir(navigateur_defaut)
+        issue = attendre_fin(serveur, affichage)
+        if issue == "non_affichee" and affichage.mode != "navigateur par défaut":
+            JOURNAL.error("Interface non affichée avec %s au bout de %s s : navigateur par défaut.",
+                          affichage.mode, DELAI_PREMIER_AFFICHAGE)
+            affichage.fermer(0)
+            affichage = Affichage(serveur.url)
+            affichage.ouvrir(navigateur_defaut=True)
+            issue = attendre_fin(serveur, affichage, 2 * DELAI_PREMIER_AFFICHAGE)
+        if issue == "non_affichee":
+            JOURNAL.error("L'interface ne s'est affichée dans aucun navigateur.")
+            message("L'interface de l'application ne s'est pas affichée.\n\n"
+                    f"Ouvrez cette adresse dans votre navigateur, puis cliquez sur OK une fois l'application utilisée :\n"
+                    f"{serveur.url}\n\nDétail technique : {dossier_utilisateur() / 'journal.txt'}")
+            if serveur.app.interface_chargee.is_set():
+                attendre_fin(serveur, affichage)
+        JOURNAL.info("Fin de l'utilisation (%s).", issue)
+    finally:
         serveur.app.quitter.set()
-        racine.destroy()
-    ttk.Button(boutons, text="Rouvrir l'application", command=lambda: webbrowser.open(serveur.url)).pack(side="left")
-    ttk.Button(boutons, text="Quitter", command=quitter).pack(side="right")
-    racine.protocol("WM_DELETE_WINDOW", quitter)
-
-    def surveiller():  # « Quitter l'application » depuis l'interface
-        if serveur.app.quitter.is_set():
-            racine.destroy()
-        else:
-            racine.after(500, surveiller)
-    racine.after(500, surveiller)
-    racine.mainloop()
+        affichage.fermer()
+        _oublier_instance(serveur)
+        serveur.arreter()
 
 
 # ------------------------------------------------------------------ vérifications (intégration continue)
@@ -268,53 +309,34 @@ def test_serveur() -> list[str]:
     return problemes
 
 
-def test_fenetre() -> list[str]:
-    """Ouvre la fenêtre exactement comme au lancement normal, vérifie que l'interface s'y affiche et appelle le
-    serveur, puis quitte comme le bouton « Quitter l'application »."""
-    if not webview2_installe():
-        return ["Moteur Microsoft Edge WebView2 absent : l'interface s'ouvrirait dans le navigateur."]
+def test_affichage() -> list[str]:
+    """Ouvre la fenêtre exactement comme au lancement normal, attend que l'interface s'y affiche et se signale,
+    puis quitte comme le bouton « Quitter l'application » (la fenêtre doit alors se fermer)."""
+    if not navigateurs():
+        return ["Aucun navigateur Edge ou Chrome trouvé : l'interface s'ouvrirait dans le navigateur par défaut."]
     serveur = demarrer_serveur()
-    resultat = {"menu": 0, "erreur": ""}
-
-    def verifier():
-        try:
-            if not serveur.app.interface_chargee.wait(DELAI_AFFICHAGE - 5):
-                resultat["erreur"] = "l'interface n'a pas interrogé le serveur"
-                return
-            for _ in range(40):
-                time.sleep(0.5)
-                try:
-                    n = _fenetre_active.evaluate_js("document.querySelectorAll('.nav a').length")
-                    if n and int(n) >= 8:
-                        resultat["menu"] = int(n)
-                        return
-                except Exception as exc:
-                    resultat["erreur"] = str(exc)
-        finally:
-            serveur.app.quitter.set()
-    threading.Thread(target=verifier, daemon=True).start()
-    issue = fenetre_native(serveur)
-    serveur.arreter()
-    if issue != "ok":
-        return [f"Fenêtre de l'application : {issue} ({resultat['erreur'] or 'sans détail'})."]
-    if resultat["menu"] < 8:
-        return [f"Interface non affichée dans la fenêtre ({resultat['erreur'] or 'menu absent'})."]
-    return []
-
-
-def test_repli() -> list[str]:
-    """Simule une fenêtre qui n'affiche pas l'interface : l'application doit la refermer d'elle-même (bascule)."""
-    if not webview2_installe():
-        return ["Moteur Microsoft Edge WebView2 absent."]
-    serveur = demarrer_serveur()
-    debut = time.time()
-    issue = fenetre_native(serveur, url=f"http://127.0.0.1:{serveur.port}/static/app.css", delai=8)
-    serveur.arreter()
-    if issue != "repli":
-        return [f"Bascule attendue, obtenu « {issue} »."]
-    if time.time() - debut > 60:
-        return ["Bascule trop lente."]
-    return []
+    affichage = Affichage(serveur.url)
+    problemes = []
+    try:
+        affichage.ouvrir()
+        if not serveur.app.interface_chargee.wait(90):
+            return [f"Interface non affichée avec {affichage.mode} au bout de 90 s."]
+        debut = time.time()
+        while not serveur.app.pages_ouvertes(DELAI_PRESENCE) and time.time() - debut < 30:
+            time.sleep(0.5)
+        if not serveur.app.pages_ouvertes(DELAI_PRESENCE):
+            problemes.append("La fenêtre ne signale pas sa présence.")
+        serveur.app.quitter.set()  # la fenêtre l'apprend à son prochain signal et se ferme
+        debut = time.time()
+        while time.time() - debut < 40 and not serveur.app.derniere_fermeture and affichage.processus_actif():
+            time.sleep(0.5)
+        if not serveur.app.derniere_fermeture and affichage.processus_actif():
+            problemes.append("La fenêtre ne s'est pas fermée après « Quitter ».")
+        JOURNAL.info("Vérification de l'affichage avec %s terminée.", affichage.mode)
+    finally:
+        affichage.fermer()
+        serveur.arreter()
+    return problemes
 
 
 def _rendre_compte(problemes: list[str], fichier: str | None) -> int:
@@ -326,7 +348,7 @@ def _rendre_compte(problemes: list[str], fichier: str | None) -> int:
 
 
 # ------------------------------------------------------------------ point d'entrée
-TESTS = {"--test-serveur": test_serveur, "--test-fenetre": test_fenetre, "--test-repli": test_repli}
+TESTS = {"--test-serveur": test_serveur, "--test-affichage": test_affichage}
 
 
 def main() -> None:
@@ -349,18 +371,12 @@ def main() -> None:
             problemes = [f"Erreur : {exc}"]
         JOURNAL.info("Vérification %s : %s", args[0], "OK" if not problemes else " ; ".join(problemes))
         sys.exit(_rendre_compte(problemes, fichier))
-    serveur = demarrer_serveur()
     try:
-        issue = "navigateur" if "--navigateur" in args else fenetre_native(serveur)
-        if issue != "ok" and not serveur.app.quitter.is_set():
-            fenetre_navigateur(serveur, repli=issue == "repli")
+        lancer(navigateur_defaut="--navigateur" in args)
     except Exception:
         JOURNAL.exception("Erreur de l'application.")
-        raise
-    finally:
-        serveur.app.quitter.set()
-        serveur.arreter()
-        JOURNAL.info("Fin de l'application.")
+        message(f"Erreur de l'application. Détail : {dossier_utilisateur() / 'journal.txt'}")
+    JOURNAL.info("Fin de l'application.")
 
 
 if __name__ == "__main__":

@@ -44,7 +44,7 @@ L'outil est disponible sous forme d'**application Windows** : un installateur `A
 - **Rapports détaillés** : historique des analyses ; un clic ouvre l'appréciation générale, les alertes, les principaux constats et les montants retenus du rapport, ainsi que son fichier Excel ;
 - **Paramètres** : profil (nom, fonction), institution et logo affichés dans la barre latérale, dossier des résultats, délais de transmission, seuils d'appréciation et d'exécution.
 
-L'interface est servie par un petit serveur interne à l'application (adresse locale 127.0.0.1, protégée par un jeton propre à chaque lancement) et s'affiche dans la fenêtre de l'application grâce au moteur **Microsoft Edge WebView2**, présent sur Windows 10 et 11. Si ce moteur manque, ou si l'interface ne s'affiche pas dans la fenêtre au bout de quelques secondes, elle s'ouvre dans le navigateur par défaut et une petite fenêtre permet de la rouvrir ou de quitter. Le menu Démarrer propose aussi un raccourci « … (dans le navigateur) ». Le déroulement de chaque lancement est consigné dans `%APPDATA%\AnalyseRapportsCB\journal.txt` (bouton « Journal de l'application » dans les Paramètres). Les analyses sont conservées dans `%APPDATA%\AnalyseRapportsCB\historique.db` ; une nouvelle analyse du même EPN pour la même période remplace la précédente. Aucune donnée n'est envoyée sur Internet.
+L'interface est servie par un petit serveur interne à l'application (adresse locale 127.0.0.1, protégée par un jeton propre à chaque lancement) et s'affiche dans une fenêtre de **Microsoft Edge en mode « application »** (sans barre d'adresse ni onglets, avec un profil propre à l'application dans `%LOCALAPPDATA%\AnalyseRapportsCB`), à défaut de Google Chrome, à défaut du navigateur par défaut : aucun composant d'affichage n'est embarqué. L'application reste ouverte tant qu'une de ses fenêtres l'est ; une seconde ouverture ouvre une nouvelle fenêtre sur la même instance. Si l'interface ne s'affiche pas dans Edge au bout de 45 secondes, elle s'ouvre dans le navigateur par défaut ; le menu Démarrer propose aussi un raccourci « … (dans le navigateur) ». Le déroulement de chaque lancement est consigné dans `%APPDATA%\AnalyseRapportsCB\journal.txt` (bouton « Journal de l'application » dans les Paramètres). Les analyses sont conservées dans `%APPDATA%\AnalyseRapportsCB\historique.db` ; une nouvelle analyse du même EPN pour la même période remplace la précédente. Aucune donnée n'est envoyée sur Internet.
 
 Construction manuelle (poste Windows avec Python 3.12) : `pip install -r requirements-dev.txt`, puis `pyinstaller packaging/AnalyseRapportsCB.spec` et `iscc packaging\installateur.iss` (Inno Setup 6). Placez au préalable le dossier de Tesseract (avec `tessdata\fra.traineddata`) dans `tesseract\` à la racine du dépôt pour l'intégrer à l'application.
 
@@ -77,7 +77,7 @@ pip install streamlit pandas
 python -m analyse_cb.interface
 ```
 
-(ou double-clic sur `AnalyseRapportsCB.pyw`). Sous Windows, l'application s'ouvre dans sa propre fenêtre (paquet `pywebview`, installé avec `requirements.txt`) ; ailleurs, ou avec l'option `--navigateur`, elle s'ouvre dans le navigateur par défaut.
+(ou double-clic sur `AnalyseRapportsCB.pyw`). L'interface s'ouvre dans Edge (ou Chrome, Chromium) en mode application ; avec l'option `--navigateur`, dans le navigateur par défaut.
 
 ### 2. Interface web
 
@@ -183,7 +183,7 @@ analyse_cb/
   tableau.py     indicateurs du tableau de bord (taux, statuts, écarts, alertes, synthèse)
   serveur.py     serveur local de l'application (interface et API)
   web/           interface de l'application (HTML, CSS, JavaScript, sans dépendance externe)
-  interface.py   lanceur de l'application (fenêtre Edge WebView2 ou navigateur)
+  interface.py   lanceur de l'application (Edge en mode application, ou navigateur) et durée de vie
   ressources.py  emplacement des ressources (application empaquetée, Tesseract intégré)
 app.py           interface web (Streamlit)
 packaging/       construction de l'application Windows (PyInstaller, installateur Inno Setup, icône)

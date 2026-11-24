@@ -527,6 +527,7 @@ def _profil_temporaire(monkeypatch, dossier):
     """Profil d'utilisateur isolé (historique, préférences, documents déposés)."""
     monkeypatch.setenv("APPDATA", str(dossier))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(dossier))
+    monkeypatch.setenv("LOCALAPPDATA", str(dossier / "local"))
     monkeypatch.setenv("ANALYSE_CB_SANS_OUVERTURE", "1")
 
 
@@ -605,6 +606,11 @@ def test_serveur_interface_et_api(rapports, references, tmp_path, monkeypatch):
         appel("/api/etat")
         assert srv.app.interface_chargee.is_set()  # signal utilisé pour vérifier l'affichage dans la fenêtre
         assert appel("/api/journal", {"message": "essai"})["ok"]
+        assert appel("/api/presence?page=p1", {}) == {"quitter": False} and srv.app.pages_ouvertes(60) == 1
+        balise = urllib.request.Request(f"{base}/api/fermeture?jeton={srv.app.jeton}&page=p1", data=b"", method="POST")
+        with urllib.request.urlopen(balise, timeout=10) as rep:  # signal envoyé à la fermeture (jeton dans l'adresse)
+            assert rep.status == 200
+        assert srv.app.pages_ouvertes(60) == 0 and srv.app.derniere_fermeture
         r = deposer(rapports["conforme"], "rapport")
         d = deposer(references["decret"], "decret")
         s = deposer(references["situation"], "situation")
@@ -639,77 +645,71 @@ def test_serveur_interface_et_api(rapports, references, tmp_path, monkeypatch):
         srv.arreter()
 
 
-def _faux_webview():
-    """Module « webview » simulé : la boucle d'affichage dure jusqu'à la fermeture de la fenêtre."""
+def test_duree_de_vie_application(tmp_path, monkeypatch):
+    """L'application reste ouverte tant qu'une fenêtre de l'interface l'est (rechargement, fenêtre réduite, analyse
+    en cours) et s'arrête quand la dernière fenêtre est fermée ou sur « Quitter l'application »."""
     import threading
+    import time
     import types
-
-    class Evenement:
-        def __init__(self):
-            self.gestionnaires = []
-
-        def __iadd__(self, f):
-            self.gestionnaires.append(f)
-            return self
-
-    class Fenetre:
-        def __init__(self, url):
-            self.url, self.events, self.fermee = url, types.SimpleNamespace(closing=Evenement()), threading.Event()
-
-        def destroy(self):
-            self.fermee.set()
-
-        def evaluate_js(self, script):
-            return 8
-
-    module = types.ModuleType("webview")
-
-    def create_window(titre, url, **options):
-        module.fenetre = Fenetre(url)
-        return module.fenetre
-
-    def start(*args, **options):
-        module.appel = (args, options)
-        assert module.fenetre.fermee.wait(10), "la fenêtre n'a pas été refermée"
-    module.create_window, module.start = create_window, start
-    return module
-
-
-def test_fenetre_application_bascule_et_options(monkeypatch):
-    """La fenêtre est ouverte avec la configuration vérifiée (sans « storage_path », cause d'une fenêtre vide en 3.0.0) ;
-    si l'interface ne s'y affiche pas, l'application la referme et bascule sur le navigateur."""
-    import threading
-    import types
+    _profil_temporaire(monkeypatch, tmp_path)
     from analyse_cb import interface
-    monkeypatch.setattr(interface, "version_webview2", lambda: "130.0.0.0")
+    from analyse_cb.serveur import Application
+    monkeypatch.setattr(interface, "DELAI_FERMETURE", 0.3)
+    monkeypatch.setattr(interface, "DELAI_PRESENCE", 1.0)
+    monkeypatch.setattr(interface, "DELAI_ABANDON", 2.0)
 
-    def faux_serveur():
-        app = types.SimpleNamespace(interface_chargee=threading.Event(), quitter=threading.Event(), travail=None)
-        return types.SimpleNamespace(url="http://127.0.0.1:1/?jeton=x", port=1, app=app)
+    def serveur():
+        return types.SimpleNamespace(app=Application())
+    sans_navigateur = types.SimpleNamespace(processus_actif=lambda: False)
+    navigateur_ouvert = types.SimpleNamespace(processus_actif=lambda: True)
+    # Interface jamais affichée.
+    assert interface.attendre_fin(serveur(), sans_navigateur, 0.5) == "non_affichee"
+    # Fenêtre ouverte puis fermée.
+    s = serveur()
+    s.app.presence("a")
+    threading.Timer(0.4, s.app.fermeture, args=("a",)).start()
+    assert interface.attendre_fin(s, sans_navigateur, 5) == "fermee"
+    # Rechargement de la page (fermeture suivie d'une nouvelle fenêtre), puis « Quitter l'application ».
+    s = serveur()
+    s.app.presence("a")
 
-    # 1. L'interface ne se charge pas : bascule.
-    faux = _faux_webview()
-    monkeypatch.setitem(sys.modules, "webview", faux)
-    assert interface.fenetre_native(faux_serveur(), delai=0.3) == "repli"
-    assert faux.appel == ((), interface.OPTIONS_FENETRE) and "storage_path" not in faux.appel[1]
-    # 2. L'interface se charge, puis l'utilisateur quitte depuis l'interface : fermeture normale.
-    faux = _faux_webview()
-    monkeypatch.setitem(sys.modules, "webview", faux)
-    serveur = faux_serveur()
-    serveur.app.interface_chargee.set()
-    threading.Timer(0.3, serveur.app.quitter.set).start()
-    assert interface.fenetre_native(serveur, delai=0.3) == "ok"
-    # 3. Fermeture de la fenêtre pendant une analyse : confirmation demandée (refus = fenêtre maintenue).
-    avant_fermeture = faux.fenetre.events.closing.gestionnaires[0]
-    serveur.app.quitter.clear()
-    serveur.app.travail = {"en_cours": True}
-    fenetre = types.SimpleNamespace(create_confirmation_dialog=lambda titre, message: False)
-    assert avant_fermeture(fenetre) is False
-    serveur.app.travail = {"en_cours": False}
-    assert avant_fermeture(fenetre) is True
-    # 4. Sans moteur WebView2 : affichage dans le navigateur.
-    monkeypatch.setattr(interface, "version_webview2", lambda: "")
-    assert interface.fenetre_native(faux_serveur()) == "indisponible"
+    def recharger():
+        s.app.fermeture("a")
+        time.sleep(0.1)
+        s.app.presence("b")
+    threading.Timer(0.2, recharger).start()
+    threading.Timer(0.7, s.app.quitter.set).start()
+    assert interface.attendre_fin(s, sans_navigateur, 5) == "quitter"
+    # Fenêtre réduite (plus de signe de vie) alors que le navigateur est ouvert : attente, puis abandon.
+    s = serveur()
+    s.app.presence("a")
+    debut = time.time()
+    assert interface.attendre_fin(s, navigateur_ouvert, 5) == "fermee" and time.time() - debut >= 2.0
+    # Fenêtre fermée pendant une analyse : l'application attend la fin de l'analyse.
+    s = serveur()
+    s.app.presence("a")
+    s.app.travail = {"en_cours": True}
+    s.app.fermeture("a")
+    threading.Timer(0.8, lambda: s.app.travail.update(en_cours=False)).start()
+    debut = time.time()
+    assert interface.attendre_fin(s, sans_navigateur, 5) == "fermee" and time.time() - debut >= 0.8
+
+
+def test_affichage_mode_application(tmp_path, monkeypatch):
+    """L'interface s'ouvre en mode application avec un profil propre à l'application (données locales)."""
+    _profil_temporaire(monkeypatch, tmp_path)
+    from analyse_cb import interface
+    a = interface.Affichage("http://127.0.0.1:1/?jeton=x")
+    commande = a.commande("Microsoft Edge", "msedge.exe")
+    assert commande[0] == "msedge.exe" and commande[-1] == "--app=http://127.0.0.1:1/?jeton=x"
+    profil = next(c for c in commande if c.startswith("--user-data-dir="))
+    assert "affichage" in profil and "Microsoft_Edge" in profil
+    monkeypatch.setenv("ANALYSE_CB_NAVIGATEUR", "navigateur-de-test")
+    assert interface.navigateurs() == [("Navigateur imposé", "navigateur-de-test")]
+    monkeypatch.setenv("ANALYSE_CB_NAVIGATEUR", str(tmp_path / "absent.exe"))
+    ouverts = []
+    monkeypatch.setattr(interface.webbrowser, "open", ouverts.append)
+    assert a.ouvrir() == "navigateur par défaut" and ouverts == [a.url]  # navigateur introuvable : repli
 
 
 def test_lanceur_application(tmp_path, monkeypatch):
@@ -717,8 +717,6 @@ def test_lanceur_application(tmp_path, monkeypatch):
     _profil_temporaire(monkeypatch, tmp_path)
     from analyse_cb import interface
     assert interface.main and interface.test_serveur() == []
-    if not sys.platform.startswith("win"):
-        assert interface.webview2_installe() is False
 
 
 def test_redaction_commentaires_grille(res_anomalies_ref, tmp_path):

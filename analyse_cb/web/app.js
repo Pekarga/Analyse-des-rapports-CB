@@ -128,9 +128,38 @@ async function quitter() {
   try { enCours = !!(await api("/api/travail")).en_cours; } catch (_) { /* serveur déjà arrêté */ }
   if (enCours && !confirm("Une analyse est en cours. Quitter quand même ?")) return;
   try { await post("/api/quitter"); } catch (_) { /* déjà arrêté */ }
+  fermerFenetre();
+}
+
+/* ------------------------------------------------------------------ présence de la fenêtre
+   L'application reste ouverte tant qu'une fenêtre de l'interface l'est : chaque fenêtre se signale régulièrement et
+   prévient de sa fermeture ; elle se ferme si l'application a été quittée. */
+const PAGE = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2);
+let fermee = false;
+function fermerFenetre() {
+  if (fermee) return;
+  fermee = true;
   document.body.innerHTML = '<div class="vide"><h3>Application fermée</h3><p>Vous pouvez fermer cette fenêtre.</p></div>';
   window.close();
 }
+async function presence() {
+  if (fermee) return;
+  try {
+    const r = await fetch("/api/presence?page=" + PAGE, { method: "POST", headers: { "X-Jeton": JETON } });
+    if ((await r.json()).quitter) fermerFenetre();
+  } catch (_) { /* application arrêtée */ }
+}
+window.addEventListener("pagehide", () => {
+  try { navigator.sendBeacon(`/api/fermeture?jeton=${encodeURIComponent(JETON)}&page=${PAGE}`); } catch (_) { /* sans effet */ }
+});
+window.addEventListener("beforeunload", e => { if (etat.sondage && !fermee) { e.preventDefault(); e.returnValue = ""; } });
+/* Navigation sans ajout à l'historique : la fenêtre peut ainsi être fermée par « Quitter l'application ». */
+document.addEventListener("click", e => {
+  const a = e.target.closest && e.target.closest('a[href^="#/"]');
+  if (!a || e.ctrlKey || e.shiftKey || e.metaKey) return;
+  e.preventDefault();
+  if (location.hash !== a.getAttribute("href")) location.replace(a.getAttribute("href"));
+});
 
 /* ------------------------------------------------------------------ éléments communs */
 function entete(titre, sous, actions = "") {
@@ -784,7 +813,7 @@ function pageAide() {
       <p><b>Comment est fixé le statut d'exécution ?</b><br>Le taux d'exécution est comparé au taux attendu en fin de période (25 %, 50 %, 75 %, 100 %). Les seuils se règlent dans les Paramètres.</p>
       <p><b>Un document scanné n'est pas lu.</b><br>Vérifiez dans Paramètres que la lecture des documents scannés est disponible. À défaut, demandez la version Word du rapport.</p>
       <p><b>Où sont conservées les données ?</b><br>Uniquement sur ce poste : les fichiers d'analyse dans le dossier des résultats, l'historique dans le profil de l'utilisateur. Aucune donnée n'est envoyée sur Internet.</p>
-      <p><b>La fenêtre de l'application reste vide.</b><br>L'application bascule d'elle-même sur le navigateur au bout de quelques secondes. Vous pouvez aussi utiliser le raccourci « Analyse des rapports des CB (dans le navigateur) » du menu Démarrer. Le déroulement est consigné dans le journal (Paramètres, Fichiers).</p></div></div>`;
+      <p><b>L'interface ne s'affiche pas.</b><br>Si Microsoft Edge ne l'affiche pas, l'application l'ouvre d'elle-même dans le navigateur par défaut au bout de 45 secondes. Vous pouvez aussi utiliser le raccourci « Analyse des rapports des CB (dans le navigateur) » du menu Démarrer. Le déroulement est consigné dans le journal (Paramètres, Fichiers).</p></div></div>`;
 }
 function pageAPropos() {
   const v = etat.app ? etat.app.version : "";
@@ -802,4 +831,6 @@ document.addEventListener("keydown", e => { if (e.key === "Escape") fermerTiroir
 document.getElementById("voile").onclick = fermerTiroir;
 window.addEventListener("hashchange", router);
 construireNav();
+presence();
+setInterval(presence, 15000);
 majEnvironnement().then(router);
