@@ -25,7 +25,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from . import __version__, historique, tableau
 from .analyse import InfosRapport, analyser, charger_decrets, charger_parametres, charger_situations
 from .analyse import PARAMETRES_DEFAUT, REFERENTIEL_DEFAUT
-from .controles import lire_date
+from .controles import DEFAUT_DELAIS, jour_mois, lire_date
 from .ressources import dossier_local, dossier_ressources, dossier_utilisateur
 
 EXT_ACCEPTEES = {"rapport": (".docx", ".pdf"), "decret": (".pdf", ".docx", ".txt"),
@@ -70,6 +70,12 @@ def parametres_effectifs(prefs: dict | None = None) -> dict:
     """Paramètres du fichier config/parametres.toml, complétés par ceux saisis dans l'application."""
     prefs = lire_preferences() if prefs is None else prefs
     return _fusion(charger_parametres(), prefs.get("parametres", {}))
+
+
+def delais_effectifs(parametres: dict) -> dict:
+    """Dates limites de transmission en vigueur (fichier des paramètres, complété par les valeurs par défaut)."""
+    d = parametres.get("delais") or {}
+    return {k: d.get(k) or v for k, v in DEFAUT_DELAIS.items()}
 
 
 def ouvrir_systeme(chemin: Path) -> None:
@@ -173,6 +179,7 @@ class Application:
             "utilisateur": {"nom": utilisateur.get("nom", ""), "fonction": utilisateur.get("fonction", "Chargé d'Études")},
             "institution": {**INSTITUTION_DEFAUT, **prefs.get("institution", {})},
             "logo": self.logo() is not None, "sortie": prefs.get("sortie") or str(dossier_sortie_defaut()),
+            "delais": delais_effectifs(parametres_effectifs(prefs)),
             "periodes": liste, "badge": badge, "en_cours": bool(self.travail and self.travail.get("en_cours")),
         }
 
@@ -184,7 +191,7 @@ class Application:
             "utilisateur": prefs.get("utilisateur", {"nom": "", "fonction": "Chargé d'Études"}),
             "institution": {**INSTITUTION_DEFAUT, **prefs.get("institution", {})},
             "sortie": prefs.get("sortie") or str(dossier_sortie_defaut()),
-            "delais": eff.get("delais", {}), "appreciation": eff.get("appreciation", {}),
+            "delais": delais_effectifs(eff), "appreciation": eff.get("appreciation", {}),
             "execution": {"seuil_vigilance": 10, "seuil_sous_execution": 20, **eff.get("execution", {})},
             "analyse": {"validation_directe": True, **eff.get("analyse", {})},
             "fichiers": {"parametres": str(PARAMETRES_DEFAUT), "referentiel": str(REFERENTIEL_DEFAUT),
@@ -200,8 +207,7 @@ class Application:
         if data.get("sortie"):
             prefs["sortie"] = str(data["sortie"]).strip()
         p = prefs.setdefault("parametres", {})
-        for section, champs in (("delais", ("rapport_etape_date_limite", "rapport_annuel_date_limite",
-                                            "rapport_trimestriel_delai_jours")),
+        for section, champs in (("delais", tuple(DEFAUT_DELAIS)),
                                 ("appreciation", ("tres_bien", "bien", "passable", "retour_cb_si_score_forme_inferieur_a",
                                                   "retour_cb_si_anomalies_majeures")),
                                 ("execution", ("seuil_vigilance", "seuil_sous_execution")),
@@ -211,9 +217,8 @@ class Application:
                 if v is None or v == "":
                     continue
                 if champ.endswith("date_limite"):
-                    if not re.fullmatch(r"\d{1,2}/\d{1,2}", str(v).strip()):
-                        raise ValueError(f"Date limite invalide (format jj/mm attendu) : {v}")
-                    v = str(v).strip()
+                    jj, mm = jour_mois(v)  # ValueError (message en français) si la date est invalide
+                    v = f"{jj:02d}/{mm:02d}"
                 elif champ == "validation_directe":
                     v = bool(v)
                 else:
@@ -287,6 +292,9 @@ class Application:
                 t["resultats"].append({
                     "id": ident, "epn": res.infos.epn, "periode": res.periode.libelle,
                     "forme": res.score_forme, "fond": res.score_fond, "anomalies_majeures": res.nb_anomalies_majeures,
+                    "date_limite": res.date_limite.isoformat(), "ecart_jours": res.ecart_jours,
+                    "date_reception": res.infos.date_reception.isoformat() if res.infos.date_reception else None,
+                    "delai": res.appreciation_delai,
                     "retour": "retourné" in suite_a_donner(res), "fichier": str(sortie_xlsx),
                     "avertissements": list(res.doc.avertissements)})
                 t["rapports"][k]["etat"] = "ok"
@@ -422,7 +430,7 @@ class Gestionnaire(BaseHTTPRequestHandler):
                 for r in historique.lister(q.get("periode") or None):
                     d = r["donnees"]
                     lignes.append({k: r[k] for k in ("id", "epn", "sigle", "tutelle", "periode_cle", "controleur", "charge",
-                                                     "date_analyse", "date_reception", "ecart_jours", "score_forme",
+                                                     "date_analyse", "date_reception", "date_limite", "ecart_jours", "score_forme",
                                                      "score_fond", "anomalies_majeures", "retour", "rapport")}
                                   | {"periode": historique.libelle_periode(r["periode_cle"], True),
                                      "delai": d.get("delai", ""), "alertes": len(d.get("alertes", []))})

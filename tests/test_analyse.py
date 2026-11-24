@@ -32,24 +32,24 @@ def references(tmp_path_factory):
 
 @pytest.fixture(scope="session")
 def res_conforme_ref(rapports, references):
-    return analyser(rapports["conforme"], InfosRapport(date_reception=date(2099, 7, 28)),
+    return analyser(rapports["conforme"], InfosRapport(date_reception=date(2099, 7, 12)),
                     decrets=references["decret"], situations=references["situation"])
 
 
 @pytest.fixture(scope="session")
 def res_anomalies_ref(rapports, references):
-    return analyser(rapports["anomalies"], InfosRapport(date_reception=date(2099, 8, 12)),
+    return analyser(rapports["anomalies"], InfosRapport(date_reception=date(2099, 7, 27)),
                     decrets=references["decret"], situations=references["situation_ecarts"])
 
 
 @pytest.fixture(scope="session")
 def res_conforme(rapports):
-    return analyser(rapports["conforme"], InfosRapport(date_reception=date(2099, 7, 28), charge_etudes="CE"))
+    return analyser(rapports["conforme"], InfosRapport(date_reception=date(2099, 7, 12), charge_etudes="CE"))
 
 
 @pytest.fixture(scope="session")
 def res_anomalies(rapports):
-    return analyser(rapports["anomalies"], InfosRapport(date_reception=date(2099, 8, 12)))
+    return analyser(rapports["anomalies"], InfosRapport(date_reception=date(2099, 7, 27)))
 
 
 def statut(res, code):
@@ -76,7 +76,7 @@ def test_conforme_identification(res_conforme):
     assert r.infos.epn == "Agence Nationale d'Exemple"
     assert r.infos.controleur == "KOUASSI Exemple"
     assert r.periode.type == "etape" and r.periode.annee == 2099
-    assert r.date_limite == date(2099, 7, 31)
+    assert r.date_limite == date(2099, 7, 15)  # 2e trimestre (rapport d'étape au 30 juin) : 15 juillet
     assert r.ecart_jours == -3 and r.appreciation_delai == "Transmis dans les délais"
     assert r.canevas_en_vigueur[0] == "Oui"
 
@@ -139,7 +139,7 @@ def test_anomalies_calculs_et_coherence(res_anomalies):
     assert fond(res_anomalies, "pres_ressources").fiabilite == "Non fiable"
     assert fond(res_anomalies, "exec_recettes").coherence == "Incohérent"
     assert fond(res_anomalies, "resultat_budgetaire").coherence == "Incohérent"
-    assert res_anomalies.ecart_jours == 12
+    assert res_anomalies.ecart_jours == 12 and res_anomalies.appreciation_delai == "Hors délai de 12 jours"
 
 
 # ------------------------------------------------------------------ Excel
@@ -148,7 +148,7 @@ def test_remplissage_excel(res_anomalies, tmp_path):
     wb = openpyxl.load_workbook(sortie)
     ws = wb.worksheets[0]
     assert ws["A1"].value.startswith("CANEVAS D'ANALYSE")  # modèle conservé
-    assert ws["B14"].value.date() == date(2099, 7, 31)
+    assert ws["B14"].value.date() == date(2099, 7, 15)  # date limite du 2e trimestre
     assert ws["D14"].value.startswith("=IF(")
     assert ws["C40"].value == "Non conforme"  # ratios
     assert ws["C101"].value == "Non renseigné"
@@ -606,6 +606,34 @@ def test_difficultes_suggestions_partie_sans_sous_titres():
     assert RE_DIFFICULTE.search(difficulte)  # description d'une difficulté : reste une difficulté
 
 
+def test_dates_limites_de_transmission(tmp_path, monkeypatch):
+    """1er trimestre : 15 avril ; 2e (rapport d'étape) : 15 juillet ; 3e : 15 octobre ; 4e : 15 janvier N+1."""
+    from analyse_cb import ressources
+    from analyse_cb.analyse import charger_parametres
+    from analyse_cb.controles import Periode, _periode_trimestre, date_limite, jour_mois
+    p = charger_parametres()
+    assert [date_limite(_periode_trimestre(t, 2026), p) for t in (1, 2, 3, 4)] == [
+        date(2026, 4, 15), date(2026, 7, 15), date(2026, 10, 15), date(2027, 1, 15)]
+    assert date_limite(Periode("etape", 2026, "Rapport d'étape au 30 juin 2026"), p) == date(2026, 7, 15)
+    assert date_limite(Periode("annuel", 2026, "Rapport annuel"), p) == date(2027, 4, 30)
+    # Anciennes clés (délai en jours) ignorées : les dates par trimestre s'appliquent.
+    ancien = {"delais": {"rapport_trimestriel_delai_jours": 30, "rapport_etape_date_limite": "31/07"}}
+    assert date_limite(_periode_trimestre(3, 2026), ancien) == date(2026, 10, 15)
+    assert date_limite(_periode_trimestre(1, 2026), {"delais": {"trimestre_1_date_limite": "20/04"}}) == date(2026, 4, 20)
+    with pytest.raises(ValueError, match="n'existe pas"):
+        jour_mois("31/02")
+    # Application installée : la copie des paramètres d'une version antérieure est remplacée (ancienne conservée).
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(RACINE), raising=False)
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    copie = tmp_path / "AnalyseRapportsCB" / "parametres.toml"
+    copie.parent.mkdir(parents=True)
+    copie.write_text('[delais]\nrapport_trimestriel_delai_jours = 30\n', encoding="utf-8")
+    assert ressources.fichier_config("parametres.toml") == copie
+    assert "trimestre_3_date_limite" in copie.read_text(encoding="utf-8")
+    assert (tmp_path / "AnalyseRapportsCB" / "parametres.avant-3.2.toml").exists()
+
+
 def test_statut_execution_selon_periode():
     from analyse_cb.tableau import statut_execution
     p = {"execution": {"seuil_vigilance": 10, "seuil_sous_execution": 20}}
@@ -674,6 +702,7 @@ def test_serveur_interface_et_api(rapports, references, tmp_path, monkeypatch):
         assert t["rapports"][0]["etat"] == "ok", t
         res = t["resultats"][0]
         assert Path(res["fichier"]).exists() and res["epn"]
+        assert res["date_limite"] == "2099-07-15" and res["ecart_jours"] == 13 and res["delai"] == "Hors délai de 13 jours"
         tb = appel("/api/tableau")
         assert not tb["vide"] and tb["lignes"][0]["id"] == res["id"]
         assert appel("/api/rapports")["rapports"][0]["date_reception"] == "2099-07-28"
@@ -686,8 +715,11 @@ def test_serveur_interface_et_api(rapports, references, tmp_path, monkeypatch):
                                       "execution": {"seuil_vigilance": "5"}})
         assert p["execution"]["seuil_vigilance"] == 5 and appel("/api/etat")["utilisateur"]["nom"] == "Test"
         with pytest.raises(urllib.error.HTTPError) as e:
-            appel("/api/parametres", {"delais": {"rapport_etape_date_limite": "31-07"}})
+            appel("/api/parametres", {"delais": {"trimestre_2_date_limite": "31/02"}})
         assert e.value.code == 400
+        p = appel("/api/parametres", {"delais": {"trimestre_3_date_limite": "5/10"}})
+        assert p["delais"]["trimestre_3_date_limite"] == "05/10" and p["delais"]["trimestre_4_date_limite"] == "15/01"
+        assert appel("/api/etat")["delais"]["trimestre_3_date_limite"] == "05/10"
         assert Path(appel("/api/exporter", {"periode": tb["periode"]["cle"]})["chemin"]).exists()
     finally:
         srv.arreter()

@@ -308,3 +308,12 @@ span.cite { margin-left: 4px; }
 .epn-ds { flex: 0 0 auto; font-size: 11.5px; font-weight: 700; color: var(--bleu); background: var(--bleu-clair); border-radius: 6px; padding: 2px 7px; }
 .voir-plus { margin-top: 6px; font-size: 13px; }
 @media (max-width: 980px) { .grille-ds { grid-template-columns: 1fr; } }
+
+/* ----------------------------------------------------------- délais de transmission */
+.note-delai { font-size: 11.5px; color: var(--gris); margin-top: 4px; white-space: normal; text-align: left; }
+.retard { color: #b42323; font-weight: 700; } .a-temps { color: #15803d; font-weight: 700; }
+
+/* ----------------------------------------------------------- page « Analyse des rapports » */
+.table-rapports td select { min-width: 270px; }
+.table-rapports td:nth-child(3) { min-width: 300px; }
+.carte-resultat:first-of-type { margin-top: 0; }

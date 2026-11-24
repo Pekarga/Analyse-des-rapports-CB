@@ -139,7 +139,7 @@ def remplir_modele(res: ResultatAnalyse, sortie: str | Path, modele: str | Path 
     ws["D14"].number_format = "0"
     ws["D14"].alignment = CENTRE
     ws["E14"].value = ('=IF(D14="","Date de réception non renseignée",IF(D14<=0,"Transmis dans les délais",'
-                       '"Hors délai de "&D14&" jour(s)"))')
+                       '"Hors délai de "&D14&IF(D14>1," jours"," jour")))')
     ws["E14"].alignment = ENVELOPPE
     if not res.validation_directe:
         ws["A16"].value = ("Date limite calculée selon config/parametres.toml ; l'écart et l'appréciation se recalculent "

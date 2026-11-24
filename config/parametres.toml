@@ -2,16 +2,15 @@
 # (modifiables sans toucher au code).
 
 [delais]
-# Date limite de transmission du rapport à la DCB (format jj/mm).
-# Rapport d'étape (au 30 juin) : date limite dans la même année.
+# Dates limites de transmission des rapports à la DCB (format jj/mm).
+# 1er trimestre : 15 avril ; 2e trimestre (rapport d'étape au 30 juin) : 15 juillet ; 3e trimestre : 15 octobre ;
+# 4e trimestre : 15 janvier de l'année suivante.
+trimestre_1_date_limite = "15/04"
+trimestre_2_date_limite = "15/07"
+trimestre_3_date_limite = "15/10"
+trimestre_4_date_limite = "15/01"
 # Rapport annuel (exercice N) : date limite dans l'année N+1.
-# >>> À CONFIRMER/AJUSTER selon les instructions de la DCB en vigueur. <<<
-# (Pour 2023, la note n°0580 du 26/07/2023 fixait exceptionnellement le 04/08.)
-rapport_etape_date_limite = "31/07"
 rapport_annuel_date_limite = "30/04"
-# Rapports trimestriels (1er, 3e et 4e trimestres ; le 2e trimestre est traité comme le rapport d'étape
-# au 30 juin) : nombre de jours après la fin du trimestre. >>> À CONFIRMER. <<<
-rapport_trimestriel_delai_jours = 30
 
 [appreciation]
 # Seuils (en %) de la mention attribuée au taux de conformité de la forme et au taux de fiabilité/cohérence.

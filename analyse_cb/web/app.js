@@ -580,10 +580,37 @@ function periodesProposees() {
   const a = new Date().getFullYear();
   const l = [["", "Détectée automatiquement"]];
   [a, a - 1].forEach(x => {
-    l.push([`1er trimestre ${x}`, `1er trimestre ${x}`], [`1er semestre ${x}`, `1er semestre ${x} (rapport d'étape)`],
+    l.push([`1er trimestre ${x}`, `1er trimestre ${x}`], [`2e trimestre ${x}`, `2e trimestre ${x} (rapport d'étape au 30 juin)`],
       [`3e trimestre ${x}`, `3e trimestre ${x}`], [`4e trimestre ${x}`, `4e trimestre ${x}`], [`exercice ${x}`, `Exercice ${x} (rapport annuel)`]);
   });
   return l;
+}
+const MOIS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"];
+function jourMois(jjmm) { const [j, m] = String(jjmm || "").split("/").map(Number); return j && m ? `${j === 1 ? "1er" : j} ${MOIS[m - 1]}` : "—"; }
+function dateLimitePeriode(valeur) {
+  const d = etat.app && etat.app.delais, an = +((String(valeur || "").match(/(?:19|20)\d\d/) || [0])[0]);
+  if (!d || !an) return null;
+  const t = /^1er trimestre/.test(valeur) ? 1 : /^2e trimestre|semestre|étape/.test(valeur) ? 2 : /^3e trimestre/.test(valeur) ? 3 : /^4e trimestre/.test(valeur) ? 4 : null;
+  const [jj, mm] = d[t ? `trimestre_${t}_date_limite` : "rapport_annuel_date_limite"].split("/").map(Number);
+  const annee = t ? (mm < t * 3 ? an + 1 : an) : an + 1;  // 4e trimestre et rapport annuel : l'année suivante
+  return new Date(Date.UTC(annee, mm - 1, jj));
+}
+function delaiHtml(r) {
+  const lim = dateLimitePeriode(r.periode);
+  if (!lim) return `Date limite : selon la période détectée à l'analyse`;
+  let html = `Date limite : ${lim.toLocaleDateString("fr-FR", { timeZone: "UTC" })}`;
+  if (r.reception) {
+    const ecart = Math.round((Date.parse(r.reception) - lim.getTime()) / 86400000);
+    html += ecart > 0 ? ` · <span class="retard">hors délai de ${pluriel(ecart, "jour")}</span>` : ` · <span class="a-temps">dans les délais</span>`;
+  }
+  return html;
+}
+function resumeDelais() {
+  const d = etat.app && etat.app.delais;
+  if (!d) return "";
+  return `Dates limites de transmission : 1er trimestre le ${jourMois(d.trimestre_1_date_limite)}, 2e trimestre (rapport d'étape) le ${jourMois(d.trimestre_2_date_limite)}, `
+    + `3e trimestre le ${jourMois(d.trimestre_3_date_limite)}, 4e trimestre le ${jourMois(d.trimestre_4_date_limite)} de l'année suivante, `
+    + `rapport annuel le ${jourMois(d.rapport_annuel_date_limite)} de l'année suivante.`;
 }
 async function televerser(fichier, categorie) {
   const r = await fetch("/api/televerser", {
@@ -625,21 +652,22 @@ async function pageAnalyse() {
   const lignes = A.rapports.map((r, i) => `<tr>
       <td class="texte">${icone("fichier", 'style="width:16px;height:16px;vertical-align:-3px;color:#6b778a"')} ${esc(r.nom)}</td>
       <td><input type="date" data-i="${i}" data-champ="reception" value="${esc(r.reception || "")}" aria-label="Date de réception"></td>
-      <td><select data-i="${i}" data-champ="periode" aria-label="Période">${periodesProposees().map(([v, l]) => `<option value="${esc(v)}" ${v === (r.periode || "") ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></td>
+      <td><select data-i="${i}" data-champ="periode" aria-label="Période">${periodesProposees().map(([v, l]) => `<option value="${esc(v)}" ${v === (r.periode || "") ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>
+        <div class="note-delai" id="delai-${i}">${delaiHtml(r)}</div></td>
       <td class="centre etat-rapport" id="etat-${i}">${celluleEtat(r)}</td>
       <td class="centre"><button class="retirer lien" data-liste="rapports" data-i="${i}" title="Retirer" aria-label="Retirer">×</button></td></tr>`).join("");
   const aTraiter = A.rapports.filter(r => r.etat !== "ok").length;
   const message = aTraiter ? `${aTraiter} rapport${aTraiter > 1 ? "s" : ""} prêt${aTraiter > 1 ? "s" : ""} à analyser.`
     : A.dernier ? (A.dernier.erreur || A.dernier.message) : A.rapports.length ? "Tous les rapports de la liste ont été analysés." : "Ajoutez au moins un rapport.";
   contenu().innerHTML = entete("Analyse des rapports", "Rapports des CB, décrets de création et situations d'exécution")
-    + `<div class="grille-2 haut">
-      <div class="panneau"><h2>${icone("rapports")}Rapports des Contrôleurs Budgétaires</h2>
-        ${zoneDepot("depot-rapports", "Déposez les rapports ici", "ou cliquez pour les choisir (Word ou PDF, y compris scannés)")}
-        ${A.rapports.length ? `<div class="defilant" style="margin-top:12px"><table class="donnees"><thead><tr><th>Rapport</th><th>Date de réception</th><th>Période</th><th>État</th><th></th></tr></thead><tbody>${lignes}</tbody></table></div>
+    + `<div class="panneau"><h2>${icone("rapports")}Rapports des Contrôleurs Budgétaires</h2>
+        ${zoneDepot("depot-rapports", "Déposez les rapports ici", "ou cliquez pour les choisir (Word ou PDF, y compris scannés)", A.rapports.length > 0)}
+        ${A.rapports.length ? `<div class="defilant" style="margin-top:12px"><table class="donnees table-rapports"><thead><tr><th>Rapport</th><th>Date de réception</th><th>Période et date limite</th><th>État</th><th></th></tr></thead><tbody>${lignes}</tbody></table></div>
         <div class="barre-outils"><span class="aide" style="margin:0">Date de réception commune :</span><input type="date" id="date-commune" aria-label="Date de réception commune">
           <button class="bouton" id="meme-date">${icone("calendrier")}Appliquer à tous</button><button class="bouton" id="vider">${icone("corbeille")}Vider la liste</button></div>` : ""}
+        <p class="aide pied">${resumeDelais()} Elles se modifient dans les Paramètres.</p>
       </div>
-      <div class="pile">
+      <div class="grille-2-egal haut" style="margin-top:16px">
         <div class="panneau"><h2>${icone("balance")}Documents de référence <span class="droite aide" style="margin:0">facultatifs</span></h2>
           <div class="ligne-champs">
             <div>${zoneDepot("depot-decrets", "Décrets de création", "PDF, Word ou texte", true)}${listeFichiersHtml(A.decrets, "decrets")}</div>
@@ -659,14 +687,18 @@ async function pageAnalyse() {
           </div>
           <div class="barre-progres"><div id="progres" style="width:${!aTraiter && A.dernier ? 100 : 0}%"></div></div>
           <div class="etat-texte" id="etat-texte">${esc(message)}</div>
-          <div id="resultats"></div>
         </div>
-      </div></div>`;
+      </div>
+      <div class="panneau" id="resultats" style="margin-top:16px" hidden></div>`;
 
   brancherDepot("depot-rapports", "rapport", [".docx", ".pdf"], f => { A.rapports.push({ ...f, reception: "", periode: "", etat: "attente" }); pageAnalyse(); });
   brancherDepot("depot-decrets", "decret", [".pdf", ".docx", ".txt"], f => { A.decrets.push(f); pageAnalyse(); });
   brancherDepot("depot-situations", "situation", [".xlsx", ".xlsm", ".csv", ".pdf", ".docx"], f => { A.situations.push(f); pageAnalyse(); });
-  document.querySelectorAll("[data-champ]").forEach(el => el.onchange = () => { A.rapports[+el.dataset.i][el.dataset.champ] = el.value; });
+  document.querySelectorAll("[data-champ]").forEach(el => el.onchange = () => {
+    const i = +el.dataset.i;
+    A.rapports[i][el.dataset.champ] = el.value;
+    document.getElementById("delai-" + i).innerHTML = delaiHtml(A.rapports[i]);
+  });
   document.querySelectorAll(".retirer[data-liste]").forEach(b => b.onclick = () => { A[b.dataset.liste].splice(+b.dataset.i, 1); pageAnalyse(); });
   document.getElementById("charge").oninput = e => { A.charge = e.target.value; };
   document.getElementById("sortie").oninput = e => { A.sortie = e.target.value; };
@@ -713,6 +745,7 @@ async function lancerAnalyse() {
     choisis.forEach(r => { r.etat = "attente"; r.erreur = ""; });
     document.querySelectorAll(".etat-rapport").forEach((cel, i) => { cel.innerHTML = celluleEtat(A.rapports[i]); });
     document.getElementById("resultats").innerHTML = "";
+    document.getElementById("resultats").hidden = true;
     etat.finAttendue = true;
     demarrerSuivi();
   } catch (err) { toast(err.message, "erreur"); }
@@ -756,8 +789,9 @@ async function suivreAnalyse() {
 function afficherResultats(t) {
   const zone = document.getElementById("resultats");
   if (!zone || !t || !(t.resultats || []).length) return;
-  zone.innerHTML = `<h2 style="margin:16px 0 4px;font-size:15px">Résultats</h2>` + t.resultats.map(r => `<div class="carte-resultat">
-      <div><div class="t">${esc(r.epn)}</div><div class="m">${esc(r.periode)}</div>
+  zone.hidden = false;
+  zone.innerHTML = `<h2>${icone("coche")}Résultats</h2>` + t.resultats.map(r => `<div class="carte-resultat">
+      <div><div class="t">${esc(r.epn)}</div><div class="m">${esc(r.periode)} · date limite : ${dateFr(r.date_limite)}${r.date_reception ? ` · reçu le ${dateFr(r.date_reception)} · <span class="${r.ecart_jours > 0 ? "retard" : "a-temps"}">${esc(r.delai)}</span>` : " · date de réception non renseignée"}</div>
         <div class="etiquettes"><span class="etiquette">Forme ${pct(r.forme)}</span><span class="etiquette">Fond ${pct(r.fond)}</span><span class="etiquette">${r.anomalies_majeures} anomalies majeures</span>
         ${statutHtml(r.retour ? "Retour au CB" : "Exploitable", r.retour ? "rouge" : "vert")}</div>
         ${(r.avertissements || []).map(a => `<div class="m" style="margin-top:4px">⚠ ${esc(a)}</div>`).join("")}</div>
@@ -855,17 +889,17 @@ async function pageRapports() {
   const opts = [`<option value="">Toutes les périodes</option>`].concat(d.periodes.map(p => `<option value="${p.cle}">${esc(p.libelle)}</option>`)).join("");
   contenu().innerHTML = entete("Rapports détaillés", "Historique des analyses : cliquez sur un rapport pour lire son analyse",
     `<div class="choix-periode">${icone("calendrier")}<select id="filtre-periode">${opts}</select></div><div class="choix-periode"><input id="recherche" placeholder="Rechercher un EPN, un CB…" style="border:0;outline:0;min-width:220px"></div>`)
-    + `<div class="panneau"><div class="defilant"><table class="donnees" id="table-rapports"><thead><tr><th>EPN</th><th>Période</th><th>Contrôleur Budgétaire</th><th>Réception</th><th>Délai</th><th>Forme</th><th>Fond</th><th>Anomalies majeures</th><th>Suite</th><th>Analysé le</th></tr></thead><tbody></tbody></table></div></div>`;
+    + `<div class="panneau"><div class="defilant"><table class="donnees" id="table-rapports"><thead><tr><th>EPN</th><th>Période</th><th>Contrôleur Budgétaire</th><th>Date limite</th><th>Réception</th><th>Délai</th><th>Forme</th><th>Fond</th><th>Anomalies majeures</th><th>Suite</th><th>Analysé le</th></tr></thead><tbody></tbody></table></div></div>`;
   const remplir = () => {
     const per = document.getElementById("filtre-periode").value, q = document.getElementById("recherche").value.toLowerCase();
     const rows = d.rapports.filter(r => (!per || r.periode_cle === per) && (!q || `${r.epn} ${r.controleur} ${r.tutelle}`.toLowerCase().includes(q)));
     document.querySelector("#table-rapports tbody").innerHTML = rows.map(r => `<tr class="cliquable" data-id="${r.id}">
       <td class="texte"><b>${esc(r.epn)}</b><div style="color:#6b778a;font-size:12px">${esc(r.tutelle)}</div></td><td class="centre">${esc(r.periode)}</td>
-      <td class="texte">${esc(r.controleur || "—")}</td><td class="centre">${dateFr(r.date_reception)}</td>
+      <td class="texte">${esc(r.controleur || "—")}</td><td class="centre">${dateFr(r.date_limite)}</td><td class="centre">${dateFr(r.date_reception)}</td>
       <td class="centre">${r.ecart_jours == null ? "—" : r.ecart_jours > 0 ? statutHtml(`+${r.ecart_jours} j`, "rouge") : statutHtml("Dans les délais", "vert")}</td>
       <td>${pct(r.score_forme)}</td><td>${pct(r.score_fond)}</td><td class="centre">${r.anomalies_majeures}</td>
       <td class="centre">${statutHtml(r.retour ? "Retour au CB" : "Exploitable", r.retour ? "rouge" : "vert")}</td><td class="centre">${dateFr(r.date_analyse)}</td></tr>`).join("")
-      || `<tr><td colspan="10" class="texte" style="text-align:center;color:#6b778a">Aucun rapport ne correspond à la recherche.</td></tr>`;
+      || `<tr><td colspan="11" class="texte" style="text-align:center;color:#6b778a">Aucun rapport ne correspond à la recherche.</td></tr>`;
     document.querySelectorAll("#table-rapports tr.cliquable").forEach(tr => tr.onclick = () => ouvrirRapport(+tr.dataset.id));
   };
   document.getElementById("filtre-periode").onchange = remplir;
@@ -942,7 +976,9 @@ async function pageParametres() {
         <label class="interrupteur" style="margin-top:12px"><input type="checkbox" id="validation" ${p.analyse.validation_directe ? "checked" : ""}> Produire les fichiers d'analyse sous forme définitive (statuts tranchés)</label></div>
     </div><div class="pile">
       <div class="panneau section-param"><h2>${icone("calendrier")}Délais de transmission</h2><div class="ligne-champs">
-        ${c("delais", "rapport_etape_date_limite", "Rapport d'étape (au 30 juin)", "Date limite, format jj/mm")}${c("delais", "rapport_annuel_date_limite", "Rapport annuel", "Date limite en N+1, format jj/mm")}${c("delais", "rapport_trimestriel_delai_jours", "Rapports trimestriels", "Nombre de jours après la fin du trimestre", "number")}</div></div>
+        ${c("delais", "trimestre_1_date_limite", "1er trimestre", "Date limite, format jj/mm")}${c("delais", "trimestre_2_date_limite", "2e trimestre (rapport d'étape)", "Date limite, format jj/mm")}
+        ${c("delais", "trimestre_3_date_limite", "3e trimestre", "Date limite, format jj/mm")}${c("delais", "trimestre_4_date_limite", "4e trimestre", "Date limite l'année suivante, format jj/mm")}
+        ${c("delais", "rapport_annuel_date_limite", "Rapport annuel", "Date limite l'année suivante, format jj/mm")}</div></div>
       <div class="panneau section-param"><h2>${icone("pourcent")}Appréciation des rapports</h2><div class="ligne-champs">
         ${c("appreciation", "tres_bien", "« Très satisfaisant » à partir de (%)", "", "number")}${c("appreciation", "bien", "« Satisfaisant » à partir de (%)", "", "number")}${c("appreciation", "passable", "« Passable » à partir de (%)", "", "number")}
         ${c("appreciation", "retour_cb_si_score_forme_inferieur_a", "Retour au CB si forme inférieure à (%)", "", "number")}${c("appreciation", "retour_cb_si_anomalies_majeures", "Retour au CB à partir de (anomalies majeures)", "", "number")}</div></div>
@@ -978,6 +1014,7 @@ function pageAide() {
       <li><b>Consultez</b> le tableau de bord, les alertes et le détail de chaque rapport ; ouvrez le fichier Excel pour le transmettre.</li></ol></div>
       <div class="panneau"><h2>${icone("aide")}Questions fréquentes</h2>
       <p><b>D'où viennent les montants du tableau de bord ?</b><br>De la situation d'exécution (SIGOBE) lorsqu'elle est fournie, sinon des tableaux du rapport. La source est indiquée sous le détail par EPN.</p>
+      <p><b>Quelles sont les dates limites de transmission ?</b><br>${esc(resumeDelais())} Un rapport reçu après sa date limite est signalé « hors délai » (alerte, appréciation générale, fichier d'analyse). Ces dates se modifient dans les Paramètres.</p>
       <p><b>Comment est fixé le statut d'exécution ?</b><br>Le taux d'exécution est comparé au taux attendu en fin de période (25 %, 50 %, 75 %, 100 %). Les seuils se règlent dans les Paramètres.</p>
       <p><b>Un document scanné n'est pas lu.</b><br>Vérifiez dans Paramètres que la lecture des documents scannés est disponible. À défaut, demandez la version Word du rapport.</p>
       <p><b>Où sont conservées les données ?</b><br>Uniquement sur ce poste : les fichiers d'analyse dans le dossier des résultats, l'historique dans le profil de l'utilisateur. Aucune donnée n'est envoyée sur Internet.</p>

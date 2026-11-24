@@ -158,7 +158,10 @@ def alertes(res) -> list[dict]:
                 f"{res.nb_anomalies_majeures} anomalies majeures ; forme {res.score_forme:.0f} %"
                 + (f", fond {res.score_fond:.0f} %" if res.score_fond is not None else "") + ".")
     if res.ecart_jours is not None and res.ecart_jours > 0:
-        ajouter("attention", "Rapport transmis hors délai", f"Reçu avec {res.ecart_jours} jour(s) de retard.")
+        e = res.ecart_jours
+        ajouter("attention", "Rapport transmis hors délai",
+                f"Reçu le {res.infos.date_reception:%d/%m/%Y} pour une date limite fixée au {res.date_limite:%d/%m/%Y}, "
+                f"soit {e} jour{'s' if e > 1 else ''} de retard.")
     if res.confrontation:
         for p in res.confrontation.points:
             if p.theme.startswith("Référence du texte") and p.statut == "Écart":

@@ -48,9 +48,25 @@ def fichier_config(nom: str) -> Path:
     if not empaquete():
         return fourni
     cible = dossier_utilisateur() / nom
+    if cible.exists() and nom == "parametres.toml" and fourni.exists():
+        _mettre_a_jour_parametres(cible, fourni)
     if not cible.exists() and fourni.exists():
         shutil.copy2(fourni, cible)
     return cible
+
+
+def _mettre_a_jour_parametres(cible: Path, fourni: Path) -> None:
+    """Copie des paramètres d'une version antérieure à la 3.2 (délais trimestriels exprimés en jours) : remplacée par
+    la version fournie (dates limites par trimestre), l'ancienne étant conservée à côté."""
+    try:
+        if "rapport_trimestriel_delai_jours" not in cible.read_text(encoding="utf-8"):
+            return
+        sauvegarde = cible.with_name("parametres.avant-3.2.toml")
+        if not sauvegarde.exists():
+            shutil.copy2(cible, sauvegarde)
+        shutil.copy2(fourni, cible)
+    except OSError:
+        pass
 
 
 def configurer_tesseract() -> None:

@@ -559,9 +559,13 @@ def appreciation_generale(res) -> str:
           + (f" et {_mention(res, res.score_fond, True)} sur le fond ({res.score_fond:.0f} % des points vérifiables)."
              if res.score_fond is not None else "."))
     e = res.ecart_jours
-    p1 += (" La date de réception par la DCB n'étant pas renseignée, le respect du délai ne peut être apprécié."
-           if e is None else " Il a été transmis dans les délais." if e <= 0
-           else f" Il a été transmis avec {nombre(e)} jour{'s' if e > 1 else ''} de retard.")
+    limite = f"{res.date_limite:%d/%m/%Y}"
+    recu = f"{res.infos.date_reception:%d/%m/%Y}" if res.infos.date_reception else ""
+    p1 += (f" La date de réception par la DCB n'étant pas renseignée, le respect du délai de transmission (date limite "
+           f"du {limite}) ne peut être apprécié." if e is None
+           else f" Reçu le {recu}, il a été transmis dans le délai, fixé au {limite}." if e <= 0
+           else f" Reçu le {recu}, il a été transmis avec {nombre(e)} jour{'s' if e > 1 else ''} de retard sur la "
+                f"date limite du {limite}.")
 
     forts = []
     if res.score_forme >= 90:

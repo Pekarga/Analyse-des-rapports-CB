@@ -109,15 +109,36 @@ def detecter_periode(doc: DocumentRapport, imposee: str | None = None) -> Period
     return Periode("annuel", an, f"Période non détectée (exercice {an} supposé)", detectee=False)
 
 
+# Dates limites de transmission des rapports à la DCB (jour/mois), modifiables dans config/parametres.toml ou dans
+# les Paramètres de l'application. Le rapport du 2e trimestre est le rapport d'étape au 30 juin ; la date limite du
+# 4e trimestre et celle du rapport annuel tombent l'année suivante.
+DEFAUT_DELAIS = {"trimestre_1_date_limite": "15/04", "trimestre_2_date_limite": "15/07",
+                 "trimestre_3_date_limite": "15/10", "trimestre_4_date_limite": "15/01",
+                 "rapport_annuel_date_limite": "30/04"}
+
+
+def jour_mois(texte: str) -> tuple[int, int]:
+    """« 15/04 » → (15, 4) ; ValueError si la date n'existe pas."""
+    m = re.fullmatch(r"\s*(\d{1,2})\s*/\s*(\d{1,2})\s*", str(texte))
+    if not m:
+        raise ValueError(f"Date limite invalide (format jj/mm attendu) : {texte}")
+    jj, mm = int(m.group(1)), int(m.group(2))
+    try:
+        date(2000, mm, jj)  # contrôle de l'existence de la date (année bissextile pour accepter le 29/02)
+    except ValueError:
+        raise ValueError(f"Date limite invalide : le {texte.strip()} n'existe pas.") from None
+    return jj, mm
+
+
 def date_limite(periode: Periode, parametres: dict) -> date:
-    d = parametres.get("delais", {})
-    if periode.type == "trimestriel":
-        from datetime import timedelta
-        return periode.fin + timedelta(days=int(d.get("rapport_trimestriel_delai_jours", 30)))
-    if periode.type == "etape":
-        jj, mm = (int(x) for x in d.get("rapport_etape_date_limite", "31/07").split("/"))
-        return date(periode.annee, mm, jj)
-    jj, mm = (int(x) for x in d.get("rapport_annuel_date_limite", "30/04").split("/"))
+    d = {**DEFAUT_DELAIS, **(parametres.get("delais") or {})}
+    trimestre = periode.trimestre or (2 if periode.type == "etape" else None)
+    if trimestre:
+        jj, mm = jour_mois(d[f"trimestre_{trimestre}_date_limite"])
+        # Date limite postérieure à la fin de la période : l'année suivante si son mois précède celui de la fin.
+        annee = periode.annee + 1 if mm < periode.fin.month else periode.annee
+        return date(annee, mm, jj)
+    jj, mm = jour_mois(d["rapport_annuel_date_limite"])
     return date(periode.annee + 1, mm, jj)
 
 

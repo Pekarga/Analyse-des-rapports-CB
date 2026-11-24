@@ -127,7 +127,7 @@ class ResultatAnalyse:
         e = self.ecart_jours
         if e is None:
             return "Date de réception non renseignée"
-        return "Transmis dans les délais" if e <= 0 else f"Hors délai de {e} jour(s)"
+        return "Transmis dans les délais" if e <= 0 else f"Hors délai de {e} jour{'s' if e > 1 else ''}"
 
     @property
     def score_forme(self) -> float:
