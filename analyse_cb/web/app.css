@@ -104,6 +104,7 @@ a { color: var(--bleu); }
 .delta .hausse { color: var(--vert); font-weight: 600; }
 .delta .baisse { color: var(--rouge); font-weight: 600; }
 .fond-bleu { background: var(--bleu); } .fond-vert { background: var(--vert); }
+.fond-violet { background: var(--violet); } .fond-gris { background: #a0aec0; }
 .fond-orange { background: var(--orange); } .fond-rouge { background: var(--rouge); }
 
 /* ----------------------------------------------------------- panneaux */
@@ -259,3 +260,51 @@ td input, td select { padding: 5px 8px; }
   .barre { width: 210px; flex-basis: 210px; }
   .cadre { background: linear-gradient(to right, var(--marine) 210px, var(--fond) 210px); }
 }
+
+/* ----------------------------------------------------------- ratios de gestion */
+.lien-detail { font-size: 13px; font-weight: 600; text-decoration: none; }
+.lien-detail:hover { text-decoration: underline; }
+.ratio { padding: 7px 0 9px; }
+.ratio-tete { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: 13.5px; }
+.ratio-tete b { display: inline-block; min-width: 34px; }
+.ratio-val { font-weight: 700; white-space: nowrap; }
+.ratio-val small, .delta .neutre { color: var(--gris); font-weight: 600; font-size: 12px; }
+.nc { color: var(--gris); font-weight: 400; font-style: italic; }
+.jauge { height: 9px; background: #edf1f6; border-radius: 6px; overflow: hidden; margin-top: 5px; }
+.jauge i { display: block; height: 100%; border-radius: 6px; }
+.citations { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--trait); }
+.citations .titre { font-weight: 700; font-size: 13px; margin-bottom: 4px; }
+.citations .ligne { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; color: var(--encre-2); }
+.puce-c { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
+.puce-c.vert { background: var(--vert); } .puce-c.rouge { background: var(--rouge); }
+.puce-c.gris { background: #a0aec0; } .puce-c.orange { background: var(--orange); }
+.panneau .aide.pied { margin: 10px 0 0; font-size: 12px; }
+.cite { font-size: 11.5px; font-weight: 600; margin-top: 2px; white-space: nowrap; }
+.cite.ok { color: #15803d; } .cite.ko { color: #b42323; } .cite.nv { color: var(--gris); }
+span.cite { margin-left: 4px; }
+.definitions { margin-top: 12px; font-size: 12.5px; color: var(--encre-2); display: grid; gap: 3px; }
+.lecture p { margin: 0 0 10px; }
+.panneau > .lecture { max-height: 560px; overflow-y: auto; padding-right: 6px; }
+.code-ratio { font-weight: 800; font-size: 15px; letter-spacing: .3px; }
+
+/* ----------------------------------------------------------- difficultés et suggestions */
+.panneau.ds { margin-top: 16px; }
+.tiroir > .panneau.ds { margin-top: 16px; }
+.grille-ds { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.grille-ds.une { grid-template-columns: 1fr; gap: 12px; }
+.colonne-ds h3 { font-size: 15px; margin: 0 0 4px; display: flex; align-items: center; gap: 8px; }
+.compteur { background: #fff1d6; color: #b45309; border-radius: 10px; padding: 1px 8px; font-size: 12px; font-weight: 700; }
+.colonne-ds.suggestions .compteur { background: var(--vert-clair); color: #15803d; }
+.cat-ds { font-weight: 700; font-size: 12px; color: var(--encre-2); text-transform: uppercase; letter-spacing: .3px; margin: 10px 0 2px; }
+.cat-ds span { font-weight: 600; color: var(--gris); }
+.groupe-ds ul { list-style: none; margin: 0; padding: 0; }
+.groupe-ds li { display: flex; gap: 12px; justify-content: space-between; align-items: flex-start; padding: 8px 10px;
+  border: 1px solid var(--trait); border-left: 3px solid var(--orange); border-radius: 8px; margin-top: 6px; font-size: 13.5px; }
+.colonne-ds.suggestions li { border-left-color: var(--vert); }
+.groupe-ds li[data-id] { cursor: pointer; }
+.groupe-ds li[data-id]:hover { background: #f6f9fd; }
+.groupe-ds li.masque { display: none; }
+.texte-ds { flex: 1; min-width: 0; }
+.epn-ds { flex: 0 0 auto; font-size: 11.5px; font-weight: 700; color: var(--bleu); background: var(--bleu-clair); border-radius: 6px; padding: 2px 7px; }
+.voir-plus { margin-top: 6px; font-size: 13px; }
+@media (max-width: 980px) { .grille-ds { grid-template-columns: 1fr; } }

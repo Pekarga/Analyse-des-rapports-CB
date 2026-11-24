@@ -9,6 +9,7 @@ de la période (25 % au 1er trimestre, 50 % au 30 juin, 75 % au 3e trimestre, 10
 """
 from __future__ import annotations
 
+from . import ratios
 from .historique import NATURES, libelle_periode, lister, periodes
 
 TAUX_ATTENDU = {1: 25.0, 2: 50.0, 3: 75.0, 4: 100.0, 5: 100.0}
@@ -161,27 +162,9 @@ def tableau_de_bord(periode_cle: str | None, parametres: dict) -> dict:
         t = _totaux(lignes_epn(lister(q["cle"]), parametres)) if q["cle"] != periode_cle else tot
         evolution.append({"cle": q["cle"], "libelle": q["court"], "credits": t["credits"], "taux": t["taux"]})
 
-    # Répartition des écarts (crédits non exécutés ou dépassés) par ministère de tutelle
-    par_min: dict[str, float] = {}
-    for l in lignes:
-        if l["ecart"] is not None:
-            par_min[l["tutelle"]] = par_min.get(l["tutelle"], 0.0) + abs(l["ecart"])
-    total_ecarts = sum(par_min.values())
-    segments = sorted(({"libelle": k, "valeur": v, "part": v / total_ecarts * 100 if total_ecarts else 0}
-                       for k, v in par_min.items()), key=lambda s: -s["valeur"])
-    if len(segments) > 5:
-        autres = sum(s["valeur"] for s in segments[4:])
-        segments = segments[:4] + [{"libelle": "Autres", "valeur": autres,
-                                     "part": autres / total_ecarts * 100 if total_ecarts else 0}]
-
-    # Graphiques prévu / réalisé
-    par_ministere: dict[str, dict] = {}
+    # Graphique prévu / réalisé : par EPN et par nature de dépense
     natures: dict[str, dict] = {}
     for l in lignes:
-        if l["credits"] is not None:
-            m = par_ministere.setdefault(l["tutelle"], {"libelle": l["tutelle"], "prevu": 0.0, "realise": 0.0})
-            m["prevu"] += l["credits"] or 0
-            m["realise"] += l["execution"] or 0
         for cle, libelle in NATURES:
             n = l["natures"].get(cle)
             if n and (n.get("prevu") or n.get("realise")):
@@ -191,7 +174,6 @@ def tableau_de_bord(periode_cle: str | None, parametres: dict) -> dict:
     graphiques = {
         "epn": [{"libelle": l["court"], "prevu": l["credits"], "realise": l["execution"]} for l in lignes
                 if l["credits"] is not None],
-        "ministere": list(par_ministere.values()),
         "nature": [natures[c] for c, _ in NATURES if c in natures],
     }
 
@@ -202,7 +184,9 @@ def tableau_de_bord(periode_cle: str | None, parametres: dict) -> dict:
     valeurs = [tot["credits"], tot["execution"]] + [l["credits"] for l in lignes]
     return {
         "vide": False, "periodes": liste, "periode": p, "unite": unite(valeurs), "kpi": tot,
-        "comparaison": comparaison, "evolution": evolution, "repartition": segments, "lignes": lignes,
+        "comparaison": comparaison, "evolution": evolution, "lignes": lignes,
+        "ratios": _ratios_periode(records, lister(prec["cle"]) if prec else []),
+        "difficultes": difficultes_periode(records),
         "ministeres": lignes_ministeres(lignes, p["rang"], parametres),
         "graphiques": graphiques, "alertes": alertes, "synthese": synthese, "objectif": obj,
         "attendu": TAUX_ATTENDU.get(p["rang"], 100.0),
@@ -213,6 +197,85 @@ def tableau_de_bord(periode_cle: str | None, parametres: dict) -> dict:
             "forme_moyenne": sum(r["score_forme"] for r in records) / len(records) if records else None,
         },
     }
+
+
+def _ratios_periode(records: list[dict], precedents: list[dict]) -> dict:
+    """Ratios de gestion de la période (tous EPN) et variation, en points, par rapport à la période précédente."""
+    agreges = ratios.agreger(records)
+    avant = {x["code"]: x["valeur"] for x in ratios.agreger(precedents)} if precedents else {}
+    for x in agreges:
+        prec = avant.get(x["code"])
+        x["variation"] = x["valeur"] - prec if x["valeur"] is not None and prec is not None else None
+    bases = sorted({(r["donnees"].get("ratios") or {}).get("base") for r in records} - {None})
+    sources = sorted({(r["donnees"].get("ratios") or {}).get("source") for r in records} - {None})
+    return {"agreges": agreges, "citations": ratios.citations(records), "bases": bases, "sources": sources,
+            "disponibles": sum(1 for r in records if ratios.liste(r)), "rapports": len(records)}
+
+
+CATEGORIES_DS = (("execution", "Exécution du budget"), ("controle", "Contrôle de l'exécution du budget"),
+                 ("gestion", "Gestion de l'établissement"))
+
+
+def difficultes_periode(records: list[dict]) -> dict:
+    """Difficultés et suggestions formulées par les CB dans les rapports de la période, par catégorie."""
+    out = {"difficultes": [], "suggestions": [], "categories": [{"code": c, "libelle": l} for c, l in CATEGORIES_DS],
+           "rapports": 0, "sans_difficultes": [], "sans_suggestions": [], "a_reanalyser": 0}
+    for r in records:
+        ds = r["donnees"].get("difficultes")
+        if ds is None:
+            out["a_reanalyser"] += 1
+            continue
+        out["rapports"] += 1
+        for cle in ("difficultes", "suggestions"):
+            elements = ds.get(cle) or []
+            if not elements:
+                out[f"sans_{cle}"].append(_nom_court(r))
+            for e in elements:
+                out[cle].append({**e, "id": r["id"], "epn": r["epn"], "court": _nom_court(r)})
+    ordre = {c: i for i, (c, _) in enumerate(CATEGORIES_DS)}
+    for cle in ("difficultes", "suggestions"):
+        out[cle].sort(key=lambda e: (ordre.get(e["categorie"], 9), e["court"]))
+    return out
+
+
+def analyse_ratios(periode_cle: str | None) -> dict:
+    """Page « Analyse des ratios » : ratios de la période, détail et lecture par EPN, évolution par EPN."""
+    liste = periodes()
+    if not liste:
+        return {"vide": True, "periodes": []}
+    if not periode_cle or periode_cle not in {p["cle"] for p in liste}:
+        periode_cle = liste[0]["cle"]
+    p = next(x for x in liste if x["cle"] == periode_cle)
+    records = lister(periode_cle)
+    prec = _precedente(periode_cle, liste)
+    lignes = []
+    for r in records:
+        info = r["donnees"].get("ratios") or {}
+        lst = info.get("liste") or []
+        total = info.get("total")
+        structure = []
+        for cle, libelle in ratios.CATEGORIES:
+            v = (info.get("structure") or {}).get(cle)
+            if v is not None and total:
+                structure.append({"cle": cle, "libelle": libelle, "part": v / total * 100})
+        if structure and total:
+            reste = 100 - sum(x["part"] for x in structure)
+            if reste > 0.5:
+                structure.append({"cle": "autres", "libelle": "Non classées", "part": reste})
+        lignes.append({"id": r["id"], "epn": r["epn"], "court": _nom_court(r), "tutelle": r["tutelle"],
+                       "source": info.get("source", ""), "base": info.get("base", ""), "ratios": lst,
+                       "structure": structure,
+                       "lecture": ratios.lecture(lst, info.get("base") or "dépenses engagées") if lst else ""})
+    # Évolution de chaque ratio par EPN sur les périodes analysées
+    evolution: dict[str, list] = {}
+    for q in sorted(liste, key=lambda x: (x["annee"], x["rang"])):
+        for r in lister(q["cle"]):
+            valeurs = {x["code"]: x.get("valeur") for x in ratios.liste(r)}
+            evolution.setdefault(r["epn"], []).append({"periode": q["court"], **valeurs})
+    return {"vide": False, "periodes": liste, "periode": p, "lignes": lignes,
+            "ratios": _ratios_periode(records, lister(prec["cle"]) if prec else []),
+            "precedente": prec["court"] if prec else "", "evolution": evolution,
+            "definitions": [{"code": c, "court": co, "libelle": li, "formule": f} for c, co, li, f in ratios.RATIOS]}
 
 
 def _synthese(lignes, records, tot, obj) -> dict:

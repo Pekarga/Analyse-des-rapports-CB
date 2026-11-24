@@ -413,6 +413,8 @@ class Gestionnaire(BaseHTTPRequestHandler):
                 return self._json(tableau.tableau_de_bord(q.get("periode"), parametres_effectifs()))
             if chemin == "/api/comparaison":
                 return self._json(tableau.comparaison(q.get("periode"), parametres_effectifs()))
+            if chemin == "/api/ratios":
+                return self._json(tableau.analyse_ratios(q.get("periode")))
             if chemin == "/api/alertes":
                 return self._json(tableau.toutes_alertes(q.get("periode"), parametres_effectifs()))
             if chemin == "/api/rapports":
@@ -431,6 +433,10 @@ class Gestionnaire(BaseHTTPRequestHandler):
                     return self._erreur("Analyse introuvable.", 404)
                 r["periode"] = historique.libelle_periode(r["periode_cle"])
                 r["fichier_existe"] = Path(r["fichier_analyse"]).exists()
+                info = r["donnees"].get("ratios") or {}
+                if info.get("liste"):
+                    from .ratios import lecture
+                    r["lecture_ratios"] = lecture(info["liste"], info.get("base") or "dépenses engagées")
                 return self._json(r)
             if chemin == "/api/travail":
                 return self._json(self.app.travail or {"en_cours": False})

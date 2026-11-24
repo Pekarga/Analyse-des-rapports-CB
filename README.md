@@ -37,9 +37,10 @@ L'outil est disponible sous forme d'**application Windows** : un installateur `A
 
 **Utilisation** : l'application s'ouvre sur un **tableau de bord** et comporte, dans la barre latérale :
 
-- **Tableau de bord** : crédits, exécution, taux d'exécution et écarts de la période choisie (avec l'évolution par rapport à la période précédente), évolution de l'exécution sur l'exercice, répartition des écarts par ministère de tutelle, synthèse et alertes avec une recommandation, détail par EPN ou par ministère (statut « OK », « À surveiller », « Sous-exécution » ou « Dépassement » selon le taux attendu à la fin de la période : 25 %, 50 %, 75 % ou 100 %) et graphique prévu / réalisé (par EPN, par ministère ou par nature de dépense). Le bouton **Exporter** produit ce tableau de bord au format Excel ;
+- **Tableau de bord** : crédits, exécution, taux d'exécution et écarts de la période choisie (avec l'évolution par rapport à la période précédente), évolution de l'exécution sur l'exercice, **analyse des ratios** de gestion (RRP, RDP, RDF, RDI de l'ensemble des EPN, ratios cités par les CB), synthèse et alertes avec une recommandation, détail par EPN ou par ministère (statut « OK », « À surveiller », « Sous-exécution » ou « Dépassement » selon le taux attendu à la fin de la période : 25 %, 50 %, 75 % ou 100 %), graphique prévu / réalisé (par EPN ou par nature de dépense) et **difficultés et suggestions** formulées par les CB, classées par catégorie (exécution du budget, contrôle de l'exécution, gestion de l'établissement). Le bouton **Exporter** produit ce tableau de bord au format Excel (indicateurs, ratios, difficultés et suggestions, alertes) ;
 - **Analyse des rapports** : déposer les rapports (Word ou PDF, y compris scannés), saisir leur date de réception, ajouter si possible les décrets de création et les situations d'exécution (SIGOBE, Excel, CSV, PDF), puis **Lancer l'analyse**. Chaque rapport donne son fichier d'analyse Excel (grille de la DCB rédigée) et alimente le tableau de bord ;
 - **Comparaison budgétaire** : recettes et dépenses prévues et réalisées par EPN, prévu / réalisé par nature de dépense et évolution du taux d'exécution d'une période à l'autre ;
+- **Analyse des ratios** : ratios du canevas (ressources propres, dépenses de personnel, de fonctionnement, d'investissement, d'abonnement) par EPN et pour l'ensemble, calculés sur la situation d'exécution (SIGOBE) lorsqu'elle est fournie, sinon sur les tableaux du rapport ; valeurs citées par le CB et concordance avec ses tableaux ; structure des dépenses ; lecture rédigée des ratios de chaque EPN ; évolution d'une période à l'autre ;
 - **Alertes & Anomalies** : rapports à retourner au CB, textes de création mal cités, montants contredits par la situation d'exécution, régulation non répercutée, Conseil de gestion non réuni, dépassements et sous-exécutions… ;
 - **Rapports détaillés** : historique des analyses ; un clic ouvre l'appréciation générale, les alertes, les principaux constats et les montants retenus du rapport, ainsi que son fichier Excel ;
 - **Paramètres** : profil (nom, fonction), institution et logo affichés dans la barre latérale, dossier des résultats, délais de transmission, seuils d'appréciation et d'exécution.
@@ -180,7 +181,8 @@ analyse_cb/
   excel.py       remplissage du modèle, onglets de détail, tableau de bord
   __main__.py    ligne de commande
   historique.py  historique des analyses (base SQLite locale) et indicateurs de chaque rapport
-  tableau.py     indicateurs du tableau de bord (taux, statuts, écarts, alertes, synthèse)
+  tableau.py     indicateurs du tableau de bord (taux, statuts, écarts, ratios, difficultés, alertes, synthèse)
+  ratios.py      ratios de gestion du canevas : calcul, agrégation, lecture rédigée
   serveur.py     serveur local de l'application (interface et API)
   web/           interface de l'application (HTML, CSS, JavaScript, sans dépendance externe)
   interface.py   lanceur de l'application (Edge en mode application, ou navigateur) et durée de vie

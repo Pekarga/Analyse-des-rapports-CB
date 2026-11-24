@@ -616,20 +616,30 @@ def _items(doc: DocumentRapport, det: Detection, exclure: set[int]) -> list[tupl
     return items
 
 
+# Partie « Difficultés et suggestions » sans sous-titres : un paragraphe qui formule une proposition sans décrire de
+# difficulté est rangé parmi les suggestions.
+RE_SUGGESTION = re.compile(r"\bsugger|\bsuggestion|recommand|preconis|souhait|\bnous (proposons|sollicitons|plaidons)|"
+                           r"il (conviendrait|convient|faudrait|faut|serait (utile|souhaitable|judicieux|necessaire|opportun|indique))")
+RE_DIFFICULTE = re.compile(r"difficult|probleme|contrainte|insuffisan|retard|manque|absence|faiblesse|lenteur|"
+                           r"\bne (sont|est) pas|n.(est|ont|a) pas")
+
+
 def extraire_difficultes_suggestions(doc: DocumentRapport, s: AnalyseStructure) -> dict[str, list[Element]]:
     res: dict[str, list[Element]] = {"difficultes": [], "suggestions": []}
     titres = {d.debut for d in s.detections.values() if d.mode == "titre"}
     for code in ("difficultes", "suggestions"):
         det = s[code]
         source = det if det.trouvee else s["difficultes_suggestions"]
-        if not det.trouvee and source.trouvee:
-            # Partie X sans sous-titres : on ne sait pas séparer difficultés et suggestions.
-            if code == "suggestions":
-                continue
+        commune = not det.trouvee and source.trouvee  # partie sans sous-titres « Difficultés » / « Suggestions »
+        if commune and code == "suggestions":
+            continue  # déjà répartie lors du passage « difficultes »
         for texte, page in _items(doc, source, titres):
             n = normaliser(texte)
             cat = next(c for c, _, motif in CATEGORIES if re.search(motif, n))
-            res[code].append(Element(texte, cat, source.rubrique.libelle, page))
+            cible = code
+            if commune and RE_SUGGESTION.search(n) and not RE_DIFFICULTE.search(n):
+                cible = "suggestions"
+            res[cible].append(Element(texte, cat, source.rubrique.libelle, page))
     # Les « autres suggestions » sont rattachées aux suggestions
     for texte, page in _items(doc, s["autres_suggestions"], titres):
         res["suggestions"].append(Element(texte, "gestion", "Autres suggestions", page))

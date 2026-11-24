@@ -81,6 +81,7 @@ const PAGES = [
   ["tableau", "Tableau de bord", "accueil"],
   ["analyse", "Analyse des rapports", "analyse"],
   ["comparaison", "Comparaison budgétaire", "comparaison"],
+  ["ratios", "Analyse des ratios", "pourcent"],
   ["alertes", "Alertes & Anomalies", "alerte"],
   ["rapports", "Rapports détaillés", "rapports"],
   ["parametres", "Paramètres", "parametres"],
@@ -118,7 +119,7 @@ async function majEnvironnement() {
 async function router() {
   const page = (location.hash.replace(/^#\/?/, "") || "tableau").split("?")[0];
   document.querySelectorAll(".nav a").forEach(a => a.classList.toggle("actif", a.dataset.page === page));
-  const rendu = { tableau: pageTableau, analyse: pageAnalyse, comparaison: pageComparaison, alertes: pageAlertes,
+  const rendu = { tableau: pageTableau, analyse: pageAnalyse, comparaison: pageComparaison, ratios: pageRatios, alertes: pageAlertes,
     rapports: pageRapports, parametres: pageParametres, aide: pageAide, apropos: pageAPropos }[page] || pageTableau;
   try { await rendu(); } catch (err) { contenu().innerHTML = videHtml("alerte", "Une erreur est survenue", esc(err.message)); }
   contenu().focus();
@@ -250,20 +251,6 @@ function svgBarresCourbe(points, u, L) {
   return s + "</svg>";
 }
 const COULEURS = ["#1565d8", "#f59e0b", "#1f9d4c", "#9b59b6", "#a0aec0", "#e03b3b"];
-function svgAnneau(segments, total, u) {
-  const R = 70, C = 2 * Math.PI * R;
-  let off = 0, arcs = "";
-  segments.forEach((sg, i) => {
-    const l = (sg.part / 100) * C;
-    const trait = segments.length > 1 ? Math.max(l - 1.5, 0.01) : C;
-    arcs += `<circle cx="100" cy="100" r="${R}" fill="none" stroke="${COULEURS[i % COULEURS.length]}" stroke-width="34" stroke-dasharray="${trait} ${C}" stroke-dashoffset="${-off}" transform="rotate(-90 100 100)"><title>${esc(sg.libelle)} : ${nf1.format(sg.part)} %</title></circle>`;
-    off += l;
-  });
-  const v = nf1.format((total || 0) / u.diviseur);
-  return `<svg viewBox="0 0 200 200" ${TXT} role="img" aria-label="Répartition des écarts">${arcs}
-    <text x="100" y="96" text-anchor="middle" font-size="24" font-weight="700" fill="#0f1e36">${v}</text>
-    <text x="100" y="120" text-anchor="middle" font-size="14" font-weight="600" fill="#3b4a5f">${esc(u.libelle)}</text></svg>`;
-}
 function svgGroupes(donnees, u, L) {
   const H = 260, g = 46, d = 10, h = 22, b = 36, lw = L - g - d, lh = H - h - b;
   const max = arrondiHaut(Math.max(...donnees.flatMap(x => [(x.prevu || 0) / u.diviseur, (x.realise || 0) / u.diviseur]), 0) * 1.15);
@@ -344,11 +331,7 @@ async function pageTableau() {
     <div class="legende"><span><i style="background:#1565d8"></i>Crédits (${esc(u.libelle)})</span><span><i class="rond" style="background:#1f9d4c"></i>Taux d'exécution (%)</span></div>
     <div class="graphique" id="graph-evolution-tdb"></div></div>`;
 
-  const totalEcarts = d.repartition.reduce((a, s) => a + s.valeur, 0);
-  const repartition = `<div class="panneau"><h2>${icone("camembert")}Répartition des écarts par ministère</h2>
-    ${d.repartition.length ? `<div class="donut"><div class="graphique">${svgAnneau(d.repartition, totalEcarts, u)}</div><ul>${d.repartition.map((s, i) =>
-      `<li><i style="background:${COULEURS[i % COULEURS.length]}"></i><span title="${esc(s.libelle)}">${esc(s.libelle)}</span><b>${nf1.format(s.part)} %</b></li>`).join("")}</ul></div>`
-      : `<p class="aide">Aucun écart chiffré pour cette période.</p>`}</div>`;
+  const panneauRatios = panneauRatiosHtml(d.ratios);
 
   const sy = d.synthese;
   const points = sy.points.map(p => {
@@ -377,12 +360,14 @@ async function pageTableau() {
     <p class="aide" style="margin:10px 0 0">Source des montants : ${esc(sources.join(" ; ") || "—")}. Taux attendu à la fin de la période : ${nf0.format(d.attendu)} % (statut « OK » à partir de ${nf0.format(d.objectif)} %).</p></div>`;
 
   const graph = `<div class="panneau"><h2>${icone("courbe")}Graphique d'analyse</h2>
-    <div class="onglets" id="onglets-graph"><button data-g="epn" class="actif">Par EPN</button><button data-g="ministere">Par ministère</button><button data-g="nature">Par nature de dépense</button></div>
+    <div class="onglets" id="onglets-graph"><button data-g="epn" class="actif">Par EPN</button><button data-g="nature">Par nature de dépense</button></div>
     <div class="legende" style="justify-content:flex-end"><span><i style="background:#1565d8"></i>Prévu</span><span><i style="background:#f59e0b"></i>Réalisé</span></div>
     <div class="graphique" id="graph-analyse"></div></div>`;
 
   contenu().innerHTML = entete("Tableau de bord", "Analyse des rapports des contrôleurs budgétaires", actions)
-    + kpis + `<div class="grille-3">${evolution}${repartition}${synthese}</div>` + `<div class="grille-2">${detail}${graph}</div>`;
+    + kpis + `<div class="grille-3">${evolution}${panneauRatios}${synthese}</div>` + `<div class="grille-2">${detail}${graph}</div>`
+    + panneauDifficultesHtml(d.difficultes);
+  brancherDifficultes();
 
   const dessiner = cle => {
     const donnees = d.graphiques[cle] || [];
@@ -410,6 +395,181 @@ async function pageTableau() {
     try { const r = await post("/api/exporter", { periode: etat.periode }); toast("Tableau de bord exporté : " + r.chemin); }
     catch (err) { toast(err.message, "erreur"); }
   };
+}
+
+/* ------------------------------------------------------------------ ratios de gestion */
+const COUL_RATIOS = { RRP: "#1f9d4c", RDP: "#9b59b6", RDF: "#f59e0b", RDI: "#1565d8", RDA: "#a0aec0" };
+const FOND_RATIOS = { RRP: "fond-vert", RDP: "fond-violet", RDF: "fond-orange", RDI: "fond-bleu", RDA: "fond-gris" };
+const COUL_CATEGORIES = { personnel: "#9b59b6", biens_services: "#f59e0b", transferts: "#14a3a3", investissement: "#1565d8", autres: "#a0aec0" };
+function pluriel(n, mot) { return `${n} ${mot}${n > 1 ? "s" : ""}`; }
+function variationPoints(v) {
+  return v == null ? "" : `<small class="neutre">${v >= 0 ? "↑" : "↓"} ${signe(v, nf1.format(Math.abs(v)) + " pt")}</small>`;
+}
+function jaugesRatios(liste) {
+  return liste.map(x => `<div class="ratio" title="${esc(x.libelle)} : ${esc(x.formule)}">
+      <div class="ratio-tete"><span><b>${x.code}</b> ${esc(x.court)}</span>
+        <span class="ratio-val">${x.valeur == null ? '<span class="nc">non calculable</span>' : pct(x.valeur)} ${variationPoints(x.variation)}</span></div>
+      <div class="jauge"><i style="width:${Math.max(0, Math.min(100, x.valeur || 0))}%;background:${COUL_RATIOS[x.code]}"></i></div></div>`).join("");
+}
+function citationsHtml(c) {
+  if (!c || !c.rapports) return "";
+  const parts = [];
+  if (c.concordants) parts.push(`<span><i class="puce-c vert"></i>${pluriel(c.concordants, "concordant")}</span>`);
+  if (c.discordants) parts.push(`<span><i class="puce-c rouge"></i>${pluriel(c.discordants, "discordant")}</span>`);
+  if (c.non_verifiables) parts.push(`<span><i class="puce-c gris"></i>${pluriel(c.non_verifiables, "non vérifiable")}</span>`);
+  if (c.rapports_sans_ratio) parts.push(`<span><i class="puce-c orange"></i>${c.rapports_sans_ratio === c.rapports && c.rapports === 1 ? "aucun ratio cité" : `${pluriel(c.rapports_sans_ratio, "rapport")} sans ratio cité`}</span>`);
+  return `<div class="citations"><div class="titre">Ratios cités par les CB</div><div class="ligne">${parts.join("")}</div></div>`;
+}
+function panneauRatiosHtml(r) {
+  const tete = `<h2>${icone("pourcent")}Analyse des ratios<a class="droite lien-detail" href="#/ratios">Voir le détail</a></h2>`;
+  if (!r || !r.disponibles) {
+    return `<div class="panneau">${tete}<p class="aide" style="margin:0">Ratios non disponibles pour cette période : relancez l'analyse des rapports avec cette version de l'application.</p></div>`;
+  }
+  const manque = r.rapports - r.disponibles;
+  return `<div class="panneau">${tete}${jaugesRatios(r.agreges.filter(x => x.code !== "RDA" || x.valeur != null))}${citationsHtml(r.citations)}
+    <p class="aide pied">Ensemble des EPN, pondéré par les montants. Base : ${esc(r.bases.join(", "))} ; source : ${esc(r.sources.join(", "))}.${manque ? ` ${pluriel(manque, "rapport")} à réanalyser.` : ""}</p></div>`;
+}
+function svgStructure(lignes, L) {
+  const rows = lignes.filter(l => l.structure.length);
+  const h0 = 24, hb = 24, ecart = 16, g = Math.min(150, Math.round(L * 0.26)), d = 14, lw = L - g - d;
+  const H = h0 + rows.length * (hb + ecart);
+  let s = `<svg viewBox="0 0 ${L} ${H}" width="${L}" height="${H}" ${TXT} role="img" aria-label="Structure des dépenses">`;
+  [0, 25, 50, 75, 100].forEach(t => {
+    const x = g + lw * t / 100;
+    s += `<line x1="${x}" x2="${x}" y1="${h0 - 4}" y2="${H - ecart + 4}" stroke="#e8edf3"/><text x="${x}" y="${h0 - 9}" text-anchor="middle" font-size="11" fill="#56657a">${t} %</text>`;
+  });
+  const car = Math.max(8, Math.floor(g / 7.5));
+  rows.forEach((l, i) => {
+    const y = h0 + i * (hb + ecart);
+    const nom = l.court.length > car ? l.court.slice(0, car - 1) + "…" : l.court;
+    s += `<text x="${g - 8}" y="${y + hb / 2 + 4}" text-anchor="end" font-size="12.5" font-weight="600" fill="#0f1e36"><title>${esc(l.epn)}</title>${esc(nom)}</text>`;
+    let x = g;
+    l.structure.forEach(seg => {
+      const w = Math.max(0, lw * seg.part / 100);
+      s += `<rect x="${x}" y="${y}" width="${w}" height="${hb}" fill="${COUL_CATEGORIES[seg.cle] || "#a0aec0"}"><title>${esc(seg.libelle)} : ${pct(seg.part)}</title></rect>`;
+      if (w > 38) s += `<text x="${x + w / 2}" y="${y + hb / 2 + 4}" text-anchor="middle" font-size="11.5" font-weight="700" fill="#fff">${nf0.format(seg.part)} %</text>`;
+      x += w;
+    });
+  });
+  return s + "</svg>";
+}
+function svgCourbes(points, codes, L) {
+  const H = 240, g = 46, d = 18, h = 18, b = 30, lw = L - g - d, lh = H - h - b;
+  const y = v => h + lh - (v / 100) * lh, pas = lw / Math.max(points.length, 1);
+  let s = `<svg viewBox="0 0 ${L} ${H}" width="${L}" height="${H}" ${TXT} role="img" aria-label="Évolution des ratios">`;
+  for (let i = 0; i <= 4; i++) {
+    const v = 25 * i;
+    s += `<line x1="${g}" x2="${L - d}" y1="${y(v)}" y2="${y(v)}" stroke="#e8edf3"/><text x="${g - 7}" y="${y(v) + 4}" text-anchor="end" font-size="11.5" fill="#56657a">${v} %</text>`;
+  }
+  points.forEach((p, i) => { s += `<text x="${g + pas * (i + 0.5)}" y="${H - 9}" text-anchor="middle" font-size="12.5" fill="#0f1e36">${esc(p.periode)}</text>`; });
+  const etiquettes = [];
+  codes.forEach(code => {
+    const pts = points.map((p, i) => p[code] == null ? null : [g + pas * (i + 0.5), y(p[code]), p[code]]).filter(Boolean);
+    if (pts.length > 1) s += `<polyline points="${pts.map(q => q[0] + "," + q[1]).join(" ")}" fill="none" stroke="${COUL_RATIOS[code]}" stroke-width="2.5" stroke-linejoin="round"/>`;
+    pts.forEach(([x, yy, v]) => { s += `<circle cx="${x}" cy="${yy}" r="4.5" fill="#fff" stroke="${COUL_RATIOS[code]}" stroke-width="2.5"><title>${code} : ${pct(v)}</title></circle>`; });
+    const dernier = pts[pts.length - 1];
+    if (dernier) etiquettes.push({ code, x: dernier[0] + 9, y: dernier[1] + 4 });
+  });
+  etiquettes.sort((a, b) => a.y - b.y);  // étiquettes espacées d'au moins 13 px
+  for (let i = 1; i < etiquettes.length; i++) if (etiquettes[i].y - etiquettes[i - 1].y < 13) etiquettes[i].y = etiquettes[i - 1].y + 13;
+  etiquettes.forEach(e => { s += `<text x="${e.x}" y="${e.y}" font-size="11.5" font-weight="700" fill="${COUL_RATIOS[e.code]}">${e.code}</text>`; });
+  return s + "</svg>";
+}
+function insecable(t) { return esc(t).replace(/ (%|FCFA|:|;|\?|!)/g, "\u00a0$1").replace(/(n°) /g, "$1\u00a0"); }
+function celluleRatio(x) {
+  if (!x) return `<td class="centre">—</td>`;
+  let html = x.valeur == null ? '<span class="nc">—</span>' : `<b>${pct(x.valeur)}</b>`;
+  if (x.cite != null) {
+    const [cls, lib] = x.coherent === true ? ["ok", "concordant"] : x.coherent === false ? ["ko", "discordant"] : ["nv", "non vérifiable"];
+    html += `<div class="cite ${cls}" title="${esc(x.phrase || "")}">cité ${pct(x.cite)} · ${lib}</div>`;
+  }
+  if (x.rapport != null && x.valeur != null && Math.abs(x.rapport - x.valeur) >= 0.5) html += `<div class="cite nv">tableaux : ${pct(x.rapport)}</div>`;
+  return `<td class="centre">${html}</td>`;
+}
+
+/* ------------------------------------------------------------------ difficultés et suggestions */
+const CATEGORIES_DS = [{ code: "execution", libelle: "Exécution du budget" }, { code: "controle", libelle: "Contrôle de l'exécution du budget" },
+  { code: "gestion", libelle: "Gestion de l'établissement" }];
+function tronquer(t, n) { t = String(t || ""); return t.length > n ? t.slice(0, n - 1).replace(/\s+\S*$/, "") + "…" : t; }
+function listeDsHtml(elements, categories, avecEpn) {
+  return categories.map(cat => ({ ...cat, items: elements.filter(e => e.categorie === cat.code) })).filter(g => g.items.length)
+    .map(g => `<div class="groupe-ds"><div class="cat-ds">${esc(g.libelle)} <span>(${g.items.length})</span></div><ul>${g.items.map((e, i) =>
+      `<li class="${i >= 3 && avecEpn ? "masque" : ""}" ${avecEpn ? `data-id="${e.id}" title="Voir l'analyse du rapport"` : ""}><span class="texte-ds">${insecable(avecEpn ? tronquer(e.texte, 280) : e.texte)}</span>${avecEpn ? `<span class="epn-ds">${esc(e.court)}</span>` : ""}</li>`).join("")}</ul>
+      ${avecEpn && g.items.length > 3 ? `<button class="lien voir-plus" type="button">${g.items.length === 4 ? "Voir le quatrième" : `Voir les ${g.items.length - 3} autres`}</button>` : ""}</div>`).join("");
+}
+function panneauDifficultesHtml(ds) {
+  const n = ds ? ds.difficultes.length : 0, m = ds ? ds.suggestions.length : 0;
+  const resume = ds && ds.rapports ? `${pluriel(n, "difficulté")} · ${pluriel(m, "suggestion")} · ${pluriel(ds.rapports, "rapport")}` : "";
+  const tete = `<h2>${icone("ampoule")}Difficultés et suggestions des Contrôleurs Budgétaires<span class="droite aide" style="margin:0">${resume}</span></h2>`;
+  if (!ds || !ds.rapports) {
+    return `<div class="panneau ds">${tete}<p class="aide" style="margin:0">Non disponibles pour cette période : relancez l'analyse des rapports avec cette version de l'application.</p></div>`;
+  }
+  const colonne = (cle, titre, vide) => `<div class="colonne-ds ${cle}"><h3>${titre} <span class="compteur">${ds[cle].length}</span></h3>
+    ${ds[cle].length ? listeDsHtml(ds[cle], ds.categories, true) : `<p class="aide" style="margin:0">${vide}</p>`}</div>`;
+  const notes = [];
+  if (ds.sans_difficultes.length && n) notes.push(`Aucune difficulté signalée : ${esc(ds.sans_difficultes.join(", "))}.`);
+  if (ds.sans_suggestions.length && m) notes.push(`Aucune suggestion formulée : ${esc(ds.sans_suggestions.join(", "))}.`);
+  if (ds.a_reanalyser) notes.push(`${pluriel(ds.a_reanalyser, "rapport")} analysé${ds.a_reanalyser > 1 ? "s" : ""} avec une version antérieure : relancez l'analyse pour l'inclure.`);
+  return `<div class="panneau ds">${tete}<div class="grille-ds">
+      ${colonne("difficultes", "Difficultés", "Aucune difficulté signalée par les Contrôleurs Budgétaires.")}
+      ${colonne("suggestions", "Suggestions", "Aucune suggestion formulée par les Contrôleurs Budgétaires.")}</div>
+    ${notes.length ? `<p class="aide pied">${notes.join(" ")}</p>` : ""}</div>`;
+}
+function brancherDifficultes() {
+  document.querySelectorAll(".ds li[data-id]").forEach(li => li.onclick = () => ouvrirRapport(+li.dataset.id));
+  document.querySelectorAll(".ds .voir-plus").forEach(b => b.onclick = () => {
+    b.parentElement.querySelectorAll("li.masque").forEach(li => li.classList.remove("masque"));
+    b.remove();
+  });
+}
+
+/* ------------------------------------------------------------------ analyse des ratios */
+async function pageRatios() {
+  const d = await api("/api/ratios" + (etat.periode ? "?periode=" + encodeURIComponent(etat.periode) : ""));
+  if (d.vide) {
+    contenu().innerHTML = entete("Analyse des ratios", "Ratios de gestion du canevas") + videHtml("pourcent", "Aucune donnée", "Analysez d'abord des rapports.", BOUTON_ANALYSER);
+    return;
+  }
+  etat.periode = d.periode.cle;
+  const r = d.ratios;
+  const cartes = `<div class="kpis">${r.agreges.filter(x => x.code !== "RDA").map(x => `<div class="kpi" title="${esc(x.libelle)} : ${esc(x.formule)}">
+      <div class="icone ${FOND_RATIOS[x.code]}"><span class="code-ratio">${x.code}</span></div><div style="min-width:0"><div class="libelle">${esc(x.court)}</div>
+      <div class="valeur">${x.valeur == null ? "—" : pct(x.valeur)}</div>
+      <div class="delta">${x.variation != null ? `${variationPoints(x.variation)} vs ${esc(d.precedente)}` : `${pluriel(x.epn, "EPN")} ${x.epn > 1 ? "pris" : "pris"} en compte`}</div></div></div>`).join("")}</div>`;
+  const avec = d.lignes.filter(l => l.ratios.length);
+  const tableau = `<div class="panneau"><h2>${icone("tableau")}Ratios par EPN</h2>
+    ${avec.length ? `<div class="defilant"><table class="donnees"><thead><tr><th>EPN</th>${d.definitions.map(x => `<th title="${esc(x.libelle)} : ${esc(x.formule)}">${x.code}<small>${esc(x.court)}</small></th>`).join("")}</tr></thead>
+      <tbody>${avec.map(l => `<tr class="cliquable" data-id="${l.id}" title="Voir l'analyse du rapport"><td class="texte"><b>${esc(l.court)}</b><div class="sous-ligne">${esc(l.source)} · base : ${esc(l.base)}</div></td>${d.definitions.map(def => celluleRatio(l.ratios.find(x => x.code === def.code))).join("")}</tr>`).join("")}
+      ${avec.length > 1 ? `<tr class="total"><td class="texte">Ensemble des EPN</td>${r.agreges.map(x => `<td class="centre">${x.valeur == null ? "—" : pct(x.valeur)}</td>`).join("")}</tr>` : ""}</tbody></table></div>`
+      : `<p class="aide" style="margin:0">Ratios non disponibles : relancez l'analyse des rapports de cette période avec cette version de l'application.</p>`}
+    <div class="definitions">${d.definitions.map(x => `<div><b>${x.code}</b> ${esc(x.libelle)} : ${esc(x.formule)}.</div>`).join("")}
+      <div>La valeur retenue est calculée sur la situation d'exécution (SIGOBE) lorsqu'elle est fournie, sinon sur les tableaux du rapport ; « cité » indique la valeur donnée par le CB et sa concordance avec les tableaux de son rapport. Le RDA n'est pas calculable : les dépenses d'abonnement ne sont isolées ni dans les tableaux du canevas ni dans la situation d'exécution.</div></div></div>`;
+  const presentes = new Set(avec.flatMap(l => l.structure.filter(x => x.part > 0.05).map(x => x.cle)));
+  const legende = `<div class="legende" style="justify-content:flex-start">${[["personnel", "Personnel"], ["biens_services", "Biens et services"], ["transferts", "Transferts"], ["investissement", "Investissements"], ["autres", "Non classées"]]
+    .filter(([c]) => presentes.has(c)).map(([c, l]) => `<span><i style="background:${COUL_CATEGORIES[c]}"></i>${l}</span>`).join("")}</div>`;
+  const structure = `<div class="panneau"><h2>${icone("histogramme")}Structure des dépenses</h2>${legende}<div class="graphique" id="graph-structure"></div></div>`;
+  const lecture = `<div class="panneau"><h2>${icone("rapports")}Lecture des ratios</h2><div class="lecture">${avec.map(l => `<p><b>${esc(l.court)}.</b> ${insecable(l.lecture)}</p>`).join("") || '<p class="aide">Aucune lecture disponible.</p>'}</div>${citationsHtml(r.citations)}</div>`;
+  const options = avec.map((l, i) => `<option value="${i}">${esc(l.epn)}</option>`).join("");
+  const evolution = `<div class="panneau" style="margin-top:16px"><h2>${icone("courbe")}Évolution des ratios</h2>
+    <div class="champ" style="margin-bottom:10px;max-width:420px"><select id="epn-ratios">${options}</select></div>
+    <div class="legende" id="legende-ratios" style="justify-content:flex-start">${["RRP", "RDP", "RDF", "RDI"].map(c => `<span><i class="rond" style="background:${COUL_RATIOS[c]}"></i>${c}</span>`).join("")}</div>
+    <div class="graphique" id="graph-ratios"></div></div>`;
+  contenu().innerHTML = entete("Analyse des ratios", "Ratios de gestion du canevas, par EPN et pour l'ensemble de la période", choixPeriode(d.periodes, d.periode.cle))
+    + cartes + tableau + `<div class="grille-2-egal" style="margin-top:16px">${structure}${lecture}</div>` + (avec.length ? evolution : "");
+  const elStructure = document.getElementById("graph-structure");
+  if (avec.some(l => l.structure.length)) graphique(elStructure, L => svgStructure(avec, L));
+  else elStructure.innerHTML = `<p class="aide">Répartition des dépenses par catégorie non disponible.</p>`;
+  const courbe = () => {
+    const l = avec[+document.getElementById("epn-ratios").value];
+    const pts = d.evolution[l.epn] || [];
+    const el = document.getElementById("graph-ratios");
+    document.getElementById("legende-ratios").hidden = pts.length < 2;
+    if (pts.length > 1) graphique(el, L => svgCourbes(pts, ["RRP", "RDP", "RDF", "RDI"], L));
+    else { DESSINS.delete(el); el.innerHTML = `<p class="aide" style="margin:0">Une seule période analysée pour cet EPN : l'évolution s'affichera dès l'analyse du rapport d'une autre période.</p>`; }
+  };
+  if (avec.length) { courbe(); document.getElementById("epn-ratios").onchange = courbe; }
+  document.querySelectorAll("tr.cliquable").forEach(tr => tr.onclick = () => ouvrirRapport(+tr.dataset.id));
+  brancherPeriode(pageRatios);
 }
 
 /* ------------------------------------------------------------------ 2. analyse des rapports */
@@ -720,7 +880,6 @@ async function ouvrirRapport(id) {
   try { r = await api("/api/rapport?id=" + id); } catch (err) { toast(err.message, "erreur"); return; }
   const D = r.donnees, m = D.montants || {};
   const u = { diviseur: Math.max(m.credits || 0, m.recettes_prevues || 0) >= 1e9 ? 1e9 : 1e6, libelle: Math.max(m.credits || 0, m.recettes_prevues || 0) >= 1e9 ? "Mds FCFA" : "M FCFA" };
-  const insecable = t => esc(t).replace(/ (%|FCFA|:|;|\?|!)/g, "\u00a0$1").replace(/(n°) /g, "$1\u00a0");
   const paragraphes = (D.appreciation || "").split(/\n\s*\n/).map(p => `<p>${insecable(p)}</p>`).join("");
   const t = document.getElementById("tiroir");
   t.innerHTML = `<button class="fermer" title="Fermer" aria-label="Fermer">×</button>
@@ -735,6 +894,15 @@ async function ouvrirRapport(id) {
     <div class="panneau"><h2>Appréciation générale</h2><div class="prose">${paragraphes || "<p>—</p>"}</div>
       <p style="margin:6px 0 0"><b>${insecable(D.suite || "")}</b></p></div>
     ${(D.alertes || []).length ? `<div class="panneau"><h2>Alertes</h2><ul class="constats">${D.alertes.map(a => `<li><span class="g ${a.niveau === "critique" ? "Majeure" : a.niveau === "attention" ? "Mineure" : "Information"}">${a.niveau === "critique" ? "Critique" : a.niveau === "attention" ? "À traiter" : "Info"}</span><span><b>${esc(a.titre)}</b> – ${esc(a.detail)}</span></li>`).join("")}</ul></div>` : ""}
+    ${(D.ratios && D.ratios.liste && D.ratios.liste.length) ? `<div class="panneau"><h2>Ratios de gestion</h2>
+      <table class="donnees"><thead><tr><th>Ratio</th><th>Valeur</th><th>Cité par le CB</th></tr></thead><tbody>
+      ${D.ratios.liste.map(x => `<tr><td class="texte" title="${esc(x.formule)}"><b>${x.code}</b> ${esc(x.court)}</td><td>${x.valeur == null ? "—" : pct(x.valeur)}</td>
+        <td class="centre">${x.cite == null ? '<span class="nc">non cité</span>' : `${pct(x.cite)} <span class="cite ${x.coherent === true ? "ok" : x.coherent === false ? "ko" : "nv"}">${x.coherent === true ? "concordant" : x.coherent === false ? "discordant" : "non vérifiable"}</span>`}</td></tr>`).join("")}</tbody></table>
+      <p class="aide" style="margin:8px 0 0">Source : ${esc(D.ratios.source)} ; base : ${esc(D.ratios.base)}.</p>
+      ${r.lecture_ratios ? `<p class="lecture" style="margin:8px 0 0">${insecable(r.lecture_ratios)}</p>` : ""}</div>` : ""}
+    ${D.difficultes ? `<div class="panneau ds"><h2>Difficultés et suggestions</h2><div class="grille-ds une">
+      <div class="colonne-ds difficultes"><h3>Difficultés <span class="compteur">${D.difficultes.difficultes.length}</span></h3>${D.difficultes.difficultes.length ? listeDsHtml(D.difficultes.difficultes, CATEGORIES_DS, false) : '<p class="aide" style="margin:0">Aucune difficulté signalée.</p>'}</div>
+      <div class="colonne-ds suggestions"><h3>Suggestions <span class="compteur">${D.difficultes.suggestions.length}</span></h3>${D.difficultes.suggestions.length ? listeDsHtml(D.difficultes.suggestions, CATEGORIES_DS, false) : '<p class="aide" style="margin:0">Aucune suggestion formulée.</p>'}</div></div></div>` : ""}
     <div class="panneau"><h2>Principaux constats</h2><ul class="constats">${(D.constats || []).map(c => `<li><span class="g ${esc(c.gravite)}">${esc(c.gravite)}</span><span>${esc(c.texte)}</span></li>`).join("") || "<li>Aucun constat.</li>"}</ul></div>
     <div class="panneau"><h2>Montants retenus</h2><table class="donnees"><tbody>
       <tr><td class="texte">Crédits (budget actuel)</td><td>${montant(m.credits, u)}</td></tr>

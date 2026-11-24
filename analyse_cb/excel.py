@@ -591,6 +591,44 @@ def exporter_tableau_de_bord(donnees: dict, sortie: str | Path) -> Path:
             ws.cell(j, col).number_format = "# ##0"
         ws.cell(j, 7).fill = PatternFill("solid", fgColor={"rouge": ROUGE, "orange": ORANGE, "jaune": "FFF2CC",
                                                             "vert": VERT}.get(l["couleur"], GRIS))
+    ws3 = wb.create_sheet("Ratios")
+    from .ratios import RATIOS
+    if "ratios_detail" not in donnees:
+        from .tableau import analyse_ratios
+        donnees = {**donnees, "ratios_detail": analyse_ratios(donnees["periode"]["cle"])["lignes"]}
+    _entetes(ws3, 1, ["EPN", "Source", "Base des dépenses"] + [f"{c} – {court} (%)" for c, court, *_ in RATIOS]
+             + ["Ratios cités par le CB"], [40, 26, 22] + [16] * len(RATIOS) + [60])
+    j = 1
+    for l in donnees["lignes"]:
+        rec = next((r for r in donnees.get("ratios_detail", []) if r["id"] == l["id"]), None)
+        if not rec or not rec["ratios"]:
+            continue
+        j += 1
+        valeurs = {x["code"]: x for x in rec["ratios"]}
+        cites = [f"{x['code']} cité {x['cite']:.1f} % ({'concordant' if x['coherent'] else 'discordant' if x['coherent'] is False else 'non vérifiable'})".replace(".", ",", 1)
+                 for x in rec["ratios"] if x.get("cite") is not None]
+        _ligne(ws3, j, [l["epn"], rec["source"], rec["base"]]
+               + [round(valeurs[c]["valeur"], 2) if c in valeurs and valeurs[c]["valeur"] is not None else None
+                  for c, *_ in RATIOS] + ["; ".join(cites) or "Aucun ratio cité"])
+    if j > 1:
+        j += 2
+        ws3.cell(j, 1, "Ensemble des EPN (pondéré par les montants)").font = Font(bold=True)
+        for k, x in enumerate(donnees["ratios"]["agreges"], start=4):
+            if x["valeur"] is not None:
+                ws3.cell(j, k, round(x["valeur"], 2))
+    else:
+        ws3.cell(2, 1, "Ratios non disponibles pour cette période (analyses à relancer avec la version 3.1).")
+    ws4 = wb.create_sheet("Difficultés-Suggestions")
+    _entetes(ws4, 1, ["Type", "Catégorie", "EPN", "Texte du rapport", "Page"], [12, 32, 34, 110, 8])
+    ds = donnees.get("difficultes") or {}
+    libelles = {c["code"]: c["libelle"] for c in ds.get("categories", [])}
+    j = 1
+    for cle, nom in (("difficultes", "Difficulté"), ("suggestions", "Suggestion")):
+        for e in ds.get(cle, []):
+            j += 1
+            _ligne(ws4, j, [nom, libelles.get(e["categorie"], e["categorie"]), e["epn"], e["texte"], e.get("page") or ""])
+    if j == 1:
+        ws4.cell(2, 1, "Aucune difficulté ni suggestion relevée dans les rapports de la période.")
     ws2 = wb.create_sheet("Alertes")
     _entetes(ws2, 1, ["Niveau", "Alerte", "EPN", "Détail"], [12, 40, 40, 90])
     for j, a in enumerate(donnees["alertes"], start=2):

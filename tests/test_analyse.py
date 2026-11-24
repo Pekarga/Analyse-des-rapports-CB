@@ -547,7 +547,17 @@ def test_historique_et_tableau_de_bord(res_conforme_ref, res_anomalies_ref, tmp_
     assert d["kpi"]["credits"] == m["credits"] and d["kpi"]["execution"] == m["execution"]
     ligne = d["lignes"][0]
     assert ligne["statut"] in ("OK", "À surveiller", "Sous-exécution", "Dépassement") and ligne["tutelle"]
-    assert d["ministeres"][0]["credits"] == m["credits"] and d["repartition"]
+    assert d["ministeres"][0]["credits"] == m["credits"] and "repartition" not in d
+    assert [g for g in d["graphiques"]] == ["epn", "nature"]  # plus de vue « par ministère » dans le graphique
+    # Ratios de gestion de la période (même source que les montants : la situation d'exécution)
+    rr = {x["code"]: x for x in d["ratios"]["agreges"]}
+    assert set(rr) == {"RRP", "RDP", "RDF", "RDI", "RDA"} and d["ratios"]["disponibles"] == 1
+    assert rr["RDF"]["valeur"] is not None and 0 <= rr["RDF"]["valeur"] <= 100
+    assert d["ratios"]["sources"][0].startswith("situation d'exécution")
+    # Difficultés et suggestions des CB
+    ds = d["difficultes"]
+    assert ds["rapports"] == 1 and ds["difficultes"] and ds["suggestions"]
+    assert {e["categorie"] for e in ds["difficultes"] + ds["suggestions"]} <= {"execution", "controle", "gestion"}
     assert d["synthese"]["recommandation"].startswith("Il est recommandé de")
     # Même EPN, même période : l'analyse est remplacée (pas de doublon).
     assert historique.enregistrer(res_anomalies_ref, tmp_path / "b.xlsx") == ident
@@ -556,9 +566,44 @@ def test_historique_et_tableau_de_bord(res_conforme_ref, res_anomalies_ref, tmp_
     assert any(a["titre"] == "Rapport à retourner au CB" and a["niveau"] == "critique" for a in al)
     wb = openpyxl.load_workbook(exporter_tableau_de_bord(tableau.tableau_de_bord(None, charger_parametres()),
                                                          tmp_path / "tdb.xlsx"))
-    assert wb.sheetnames == ["Tableau de bord", "Alertes"]
+    assert wb.sheetnames == ["Tableau de bord", "Ratios", "Difficultés-Suggestions", "Alertes"]
+    assert wb["Ratios"]["A2"].value and wb["Difficultés-Suggestions"]["A2"].value in ("Difficulté", "Suggestion")
     historique.supprimer(ident)
     assert tableau.tableau_de_bord(None, charger_parametres())["vide"]
+
+
+def test_ratios_de_gestion_calcul_et_lecture():
+    """Ratios du canevas : base des dépenses engagées, valeurs hors bornes écartées, agrégation pondérée, lecture."""
+    from analyse_cb import ratios
+    a = {"ressources_propres_realise": 20.0, "recettes_realise": 200.0, "depenses_engage": 100.0,
+         "personnel_engage": 30.0, "biens_services_engage": 50.0, "transferts_engage": 5.0, "investissement_engage": 15.0}
+    comp, base = ratios.composantes(a)
+    assert base == "engage" and ratios.valeur(*comp["RRP"]) == 10 and ratios.valeur(*comp["RDF"]) == 85
+    assert ratios.valeur(*comp["RDA"]) is None and ratios.valeur(250, 100) is None  # hors de [0 ; 100 %]
+    assert ratios.composantes({"depenses_realise": 10.0, "personnel_realise": 1.0})[1] == "realise"
+
+    def rec(num, den, cite=None, coherent=None):
+        return {"donnees": {"ratios": {"liste": [{"code": "RDP", "num": num, "den": den, "valeur": num / den * 100,
+                                                  "cite": cite, "coherent": coherent}]}}}
+    agreges = {x["code"]: x for x in ratios.agreger([rec(30, 100), rec(10, 300)])}
+    assert agreges["RDP"]["valeur"] == 10 and agreges["RDP"]["epn"] == 2  # (30 + 10) / (100 + 300)
+    c = ratios.citations([rec(30, 100, 31, False), rec(10, 300)])
+    assert c["discordants"] == 1 and c["rapports_sans_ratio"] == 1
+    texte = ratios.lecture([{"code": "RRP", "valeur": 10.0}, {"code": "RDP", "valeur": 30.0},
+                            {"code": "RDF", "valeur": 85.0}, {"code": "RDI", "valeur": 15.0},
+                            {"code": "RDA", "valeur": None, "cite": 12.0, "coherent": False}])
+    assert "10,0 % des ressources recouvrées" in texte and "transferts de l'État" in texte
+    assert "celles d'investissement 15,0 %" in texte and "Le RDA cité" in texte and "(s)" not in texte
+
+
+def test_difficultes_suggestions_partie_sans_sous_titres():
+    """Partie « Difficultés et suggestions » sans sous-titres : les propositions sont rangées parmi les suggestions."""
+    from analyse_cb.controles import RE_DIFFICULTE, RE_SUGGESTION
+    from analyse_cb.texte import normaliser
+    suggestion = normaliser("Nous suggérons la tenue régulière des sessions du Conseil de gestion.")
+    difficulte = normaliser("La principale difficulté demeure le problème de connexion ; il serait utile d'y remédier.")
+    assert RE_SUGGESTION.search(suggestion) and not RE_DIFFICULTE.search(suggestion)
+    assert RE_DIFFICULTE.search(difficulte)  # description d'une difficulté : reste une difficulté
 
 
 def test_statut_execution_selon_periode():
@@ -632,6 +677,9 @@ def test_serveur_interface_et_api(rapports, references, tmp_path, monkeypatch):
         tb = appel("/api/tableau")
         assert not tb["vide"] and tb["lignes"][0]["id"] == res["id"]
         assert appel("/api/rapports")["rapports"][0]["date_reception"] == "2099-07-28"
+        ar = appel("/api/ratios")
+        assert not ar["vide"] and ar["lignes"][0]["ratios"] and ar["lignes"][0]["lecture"]
+        assert tb["difficultes"]["rapports"] == 1
         detail = appel(f"/api/rapport?id={res['id']}")
         assert detail["fichier_existe"] and detail["donnees"]["appreciation"]
         p = appel("/api/parametres", {"utilisateur": {"nom": "Test", "fonction": "Chargé d'Études"},

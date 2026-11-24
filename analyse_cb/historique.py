@@ -196,15 +196,20 @@ def enregistrer(res, fichier_analyse: str | Path, con: sqlite3.Connection | None
     """Enregistre (ou remplace) l'analyse d'un rapport ; renvoie son identifiant."""
     from .commentaires import aerer
     from .excel import suite_a_donner
+    from .ratios import ratios_rapport
     from .redaction import appreciation_generale
     fermer = con is None
     con = con or connexion()
     pcle, annee, rang = cle_periode(res.periode)
     sigle = _sigle(res)
     cle_epn = normaliser(sigle or res.infos.epn)
+    m = montants(res)
     donnees = {
         "periode_libelle": res.periode.libelle,
-        "montants": montants(res),
+        "montants": m,
+        "ratios": ratios_rapport(res, m["source"]),
+        "difficultes": {cle: [{"texte": e.texte, "categorie": e.categorie, "page": e.page}
+                              for e in (res.difficultes or {}).get(cle, [])] for cle in ("difficultes", "suggestions")},
         "alertes": alertes(res),
         "constats": constats_principaux(res),
         "appreciation": aerer(appreciation_generale(res), 140),
