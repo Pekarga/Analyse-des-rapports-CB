@@ -715,7 +715,8 @@ def test_tableau_de_bord_et_comparaison_par_epn(rapports, references, tmp_path, 
     groupe = t2["recettes_groupes"][c["natures_recettes"][0]["groupe"]]
     assert groupe["realise"] == pytest.approx(sum(n["realise"] or 0 for n in t2["recettes_natures"].values()
                                                   if n["groupe"] == c["natures_recettes"][0]["groupe"]))
-    assert "Par nature de recettes, au T3" in c["lecture"]
+    assert "Par nature de recettes, au T3" in c["lecture"] and "recouvrés sur" in c["lecture"]
+    assert "initial" in n2 and "initial" in groupe  # prévisions initiales, pour signaler les prévisions modifiées
     # T4 2099 : date limite (15/01/2100) non atteinte, le rapport est « à venir » et non manquant
     assert "3 rapports trimestriels" in c["lecture"] and "T4 à venir (date limite : 15/01/2100)" in c["lecture"]
     assert "manque" not in c["lecture"]

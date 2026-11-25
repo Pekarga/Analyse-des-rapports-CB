@@ -374,3 +374,9 @@ span.cite { margin-left: 4px; }
 .comparaison-table tr.nature-rec td:first-child { padding-left: 22px; }
 .code-nature { display: inline-block; min-width: 58px; margin-right: 8px; font-variant-numeric: tabular-nums; color: var(--encre-2); font-size: 12.5px; }
 .comparaison-table tr.note td { padding-top: 2px; padding-bottom: 6px; border-bottom: 0; }
+.comparaison-table .lib-mesure { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.comparaison-table .lib-mesure .mesure { font-size: 12px; font-weight: 600; color: var(--gris); white-space: nowrap; }
+.comparaison-table tr.ligne-prevision td { border-bottom: 0; padding-bottom: 2px; }
+.comparaison-table tr.ligne-recouvrement td { padding-top: 2px; }
+.comparaison-table tr.sous-total.ligne-recouvrement td { font-weight: 700; }
+.comparaison-table tr.ligne-prevision td, .comparaison-table tr.ligne-recouvrement td { vertical-align: top; }

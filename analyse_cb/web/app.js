@@ -1089,21 +1089,33 @@ async function pageComparaison() {
   const groupesRec = d.natures_recettes || [];
   const avecNatures = c => c.present && Object.keys(c.recettes_natures || {}).length > 0;
   const libNature = l => l && l === l.toUpperCase() ? l.charAt(0) + l.slice(1).toLowerCase() : l;
-  const celluleRecette = (c, n, groupe = false) => {
+  // Cellule « prévisions » (prévisions actuelles ; prévisions initiales si elles ont été modifiées)
+  const cellulePrevision = (c, n, groupe = false) => {
     if (!c.present) return '<span class="nc">—</span>';
     if (!avecNatures(c)) return `<span class="nc">${c.natures_a_reanalyser ? "à réanalyser" : "—"}</span>`;
     if (!n) return `<span class="nc">${groupe ? "—" : "non inscrite"}</span>`;
-    if (!n.prevu && !n.realise) return '<span class="nc">non prévue</span>';
-    const nonRecouvree = n.prevu && !n.realise;
-    const auTrimestre = !groupe && n.periode != null && c.rang > 1 ? `<div class="sous-ligne">${signe(n.periode, montant(Math.abs(n.periode), u, false))} au trimestre</div>` : "";
-    return `<span class="${nonRecouvree ? "taux-ko" : ""}">${mt(n.realise || 0)}</span>
-      <div class="sous-ligne">${n.prevu ? `${n.taux == null ? "—" : nf1.format(n.taux) + " %"} de ${montant(n.prevu, u, false)}` : "sans prévision"}</div>${auTrimestre}`;
+    if (n.prevu == null) return '<span class="nc">non renseignées</span>';
+    const modifiee = n.initial != null && Math.abs(n.initial - n.prevu) >= 1;
+    return `${mt(n.prevu)}${modifiee ? `<div class="sous-ligne">initiales : ${montant(n.initial, u, false)}</div>` : ""}`;
   };
-  const sectionNaturesRecettes = groupesRec.length ? section("Recouvrement par nature économique de recettes")
-    + `<tr class="note"><td class="texte" colspan="${cols.length + 1}"><span class="sous-ligne">Recouvrements cumulés ; sous le montant : taux de recouvrement des prévisions${presents.some(c => c.rang > 1) ? " et montant recouvré au cours du trimestre" : ""}.</span></td></tr>`
-    + groupesRec.map(g => `<tr class="sous-total"><td class="texte">${esc(g.libelle)}</td>${cols.map(c => `<td>${celluleRecette(c, (c.recettes_groupes || {})[g.groupe], true)}</td>`).join("")}</tr>`
-      + g.natures.map(n => `<tr class="nature-rec"><td class="texte"><span class="code-nature">${esc(n.code)}</span>${esc(libNature(n.libelle))}</td>${cols.map(c => `<td>${celluleRecette(c, (c.recettes_natures || {})[n.code])}</td>`).join("")}</tr>`).join("")).join("")
-    : (presents.some(c => c.natures_a_reanalyser) ? section("Recouvrement par nature économique de recettes")
+  // Cellule « recouvrements » : cumul, taux de recouvrement des prévisions, montant recouvré au cours du trimestre
+  const celluleRecouvrement = (c, n) => {
+    if (!c.present || !avecNatures(c) || !n) return '<span class="nc">—</span>';
+    if (!n.prevu && !n.realise) return '<span class="nc">—</span>';
+    const nonRecouvree = n.prevu && !n.realise;
+    const details = [n.prevu ? (n.taux == null ? "—" : nf1.format(n.taux) + " %") : "sans prévision"];
+    if (n.periode != null && c.rang > 1) details.push(`${signe(n.periode, montant(Math.abs(n.periode), u, false))} au trimestre`);
+    return `<span class="${nonRecouvree ? "taux-ko" : ""}">${mt(n.realise || 0)}</span><div class="sous-ligne">${details.join(" · ")}</div>`;
+  };
+  const libMesure = (gauche, mesure) => `<div class="lib-mesure"><span>${gauche}</span><span class="mesure">${mesure}</span></div>`;
+  const deuxLignes = (classe, libelle, valeurs) =>
+    `<tr class="${classe} ligne-prevision"><td class="texte">${libMesure(libelle, "prévisions")}</td>${cols.map(c => `<td>${cellulePrevision(c, valeurs(c), classe === "sous-total")}</td>`).join("")}</tr>`
+    + `<tr class="${classe} ligne-recouvrement"><td class="texte">${libMesure("", "recouvrements")}</td>${cols.map(c => `<td>${celluleRecouvrement(c, valeurs(c))}</td>`).join("")}</tr>`;
+  const sectionNaturesRecettes = groupesRec.length ? section("Prévisions et recouvrements par nature économique de recettes")
+    + `<tr class="note"><td class="texte" colspan="${cols.length + 1}"><span class="sous-ligne">Pour chaque groupe de ressources et chaque nature : prévisions (actuelles, avec les prévisions initiales si elles ont été modifiées), puis recouvrements cumulés avec le taux de recouvrement des prévisions${presents.some(c => c.rang > 1) ? " et le montant recouvré au cours du trimestre" : ""}.</span></td></tr>`
+    + groupesRec.map(g => deuxLignes("sous-total", esc(g.libelle), c => (c.recettes_groupes || {})[g.groupe])
+      + g.natures.map(n => deuxLignes("nature-rec", `<span class="code-nature">${esc(n.code)}</span>${esc(libNature(n.libelle))}`, c => (c.recettes_natures || {})[n.code])).join("")).join("")
+    : (presents.some(c => c.natures_a_reanalyser) ? section("Prévisions et recouvrements par nature économique de recettes")
       + `<tr><td class="texte" colspan="${cols.length + 1}"><span class="nc">Détail par nature non disponible : relancez l'analyse des rapports avec cette version (situation d'exécution des recettes SIGOBE de préférence).</span></td></tr>` : "");
   const derniereNat = [...presents].reverse().find(avecNatures);
   const pointsNat = derniereNat ? Object.entries(derniereNat.recettes_natures).filter(([, n]) => n.prevu)

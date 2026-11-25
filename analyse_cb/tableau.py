@@ -405,10 +405,10 @@ def _recettes_par_nature(recs: list[dict]) -> dict:
     for n in (natures.fusionner(avec) if avec else []):
         prevu = n.get("actuel") if n.get("actuel") is not None else n.get("initial")
         realise = n.get("realise")
-        out[n["code"]] = {"libelle": n["libelle"], "groupe": n.get("categorie") or "", "prevu": prevu, "realise": realise,
-                          "taux": _taux_sur(realise, prevu)}
-        g = groupes.setdefault(n.get("categorie") or "", {"prevu": None, "realise": None})
-        for k, v in (("prevu", prevu), ("realise", realise)):
+        out[n["code"]] = {"libelle": n["libelle"], "groupe": n.get("categorie") or "", "initial": n.get("initial"),
+                          "prevu": prevu, "realise": realise, "taux": _taux_sur(realise, prevu)}
+        g = groupes.setdefault(n.get("categorie") or "", {"initial": None, "prevu": None, "realise": None})
+        for k, v in (("initial", n.get("initial")), ("prevu", prevu), ("realise", realise)):
             if v is not None:
                 g[k] = (g[k] or 0) + v
     for g in groupes.values():
@@ -609,7 +609,8 @@ def _lecture_natures_recettes(presents: list[dict], m, p) -> list[str]:
     phrases = []
     if principales:
         phrases.append(f"Par nature de recettes, au {b['code']} : "
-                       + " ; ".join(f"{lib(n)}, {p(n['taux'])} recouvrés sur {m(n['prevu'])} prévus" for n in principales) + ".")
+                       + " ; ".join(f"{lib(n)}, {m(n['realise'])} recouvrés sur {m(n['prevu'])} prévus ({p(n['taux'])})"
+                                    for n in principales) + ".")
     sans = [n for n in dotees if not n["realise"]]
     if sans:
         phrases.append(f"Aucun recouvrement au {b['code']} sur : "
