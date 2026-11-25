@@ -53,7 +53,8 @@ function icone(nom, extra = "") {
 const nf1 = new Intl.NumberFormat("fr-FR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 const nf0 = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 0 });
 function esc(t) { return String(t ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
-function montant(v, u, avecUnite = true) { return v == null ? "—" : nf1.format(v / u.diviseur) + (avecUnite ? " " + u.libelle : ""); }
+/* Montants écrits en entier (FCFA), avec séparateur de milliers ; les graphiques gardent une unité abrégée (u). */
+function montant(v, u, avecUnite = true) { return v == null ? "—" : nf0.format(Math.round(v)) + (avecUnite ? "\u00a0FCFA" : ""); }
 function pct(v) { return v == null ? "—" : nf1.format(v) + " %"; }
 function signe(v, txt) { return (v > 0 ? "+" : v < 0 ? "−" : "") + txt; }
 function dateFr(iso) { if (!iso) return "—"; const [a, m, j] = iso.slice(0, 10).split("-"); return `${j}/${m}/${a}`; }
@@ -339,6 +340,7 @@ function variationHtml(v, comp, points = false, inverse = false) {
   const txt = points ? nf1.format(Math.abs(v)) + " pt" : nf1.format(Math.abs(v)) + " %";
   return `<div class="delta"><span class="${bon ? "hausse" : "baisse"}">${fl} ${signe(v, txt)}</span> ${esc(comp)}</div>`;
 }
+const UNITE_KPI = ' <span class="unite-kpi">(FCFA)</span>';
 function carteKpi(ic, fond, libelle, valeur, delta) {
   return `<div class="kpi"><div class="icone ${fond}">${icone(ic)}</div><div style="min-width:0"><div class="libelle">${libelle}</div><div class="valeur">${valeur}</div>${delta}</div></div>`;
 }
@@ -361,10 +363,10 @@ async function pageTableau() {
     + `<button class="bouton primaire" id="actualiser">${icone("actualiser")}Actualiser</button>`;
   const sousExec = d.lignes.filter(l => l.statut === "Sous-exécution" || l.statut === "À surveiller").length;
   const kpis = `<div class="kpis">
-    ${carteKpi("base", "fond-bleu", "Crédits budgétaires", montant(k.credits, u), variationHtml(c.credits, c.libelle))}
-    ${carteKpi("coche", "fond-vert", "Exécution budgétaire", montant(k.execution, u), variationHtml(c.execution, c.libelle))}
+    ${carteKpi("base", "fond-bleu", `Crédits budgétaires${UNITE_KPI}`, montant(k.credits, u, false), variationHtml(c.credits, c.libelle))}
+    ${carteKpi("coche", "fond-vert", `Exécution budgétaire${UNITE_KPI}`, montant(k.execution, u, false), variationHtml(c.execution, c.libelle))}
     ${carteKpi("pourcent", "fond-orange", "Taux d'exécution", pct(k.taux), variationHtml(c.taux, c.libelle, true))}
-    ${carteKpi("alerte", "fond-rouge", "Écarts à analyser", montant(k.ecarts, u),
+    ${carteKpi("alerte", "fond-rouge", `Écarts à analyser${UNITE_KPI}`, montant(k.ecarts, u, false),
       c.ecarts != null ? variationHtml(c.ecarts, c.libelle, false, true)
         : unEpn ? `<div class="delta">statut : ${esc(statutTexte((d.lignes[0] || {}).statut || "—"))}</div>` : `<div class="delta">${sousExec} EPN à suivre sur ${k.epn}</div>`)}
   </div>`;
@@ -387,7 +389,7 @@ async function pageTableau() {
     <div class="reco">${icone("ampoule")}<div><div class="titre">Recommandation</div><div class="detail">${esc(sy.recommandation)}</div></div></div></div>`;
 
   const tot = d.kpi;
-  const ecartHtml = v => v == null ? "—" : signe(v, nf1.format(Math.abs(v) / u.diviseur));
+  const ecartHtml = v => v == null ? "—" : signe(v, nf0.format(Math.round(Math.abs(v))));
   const ligneHtml = (l, parEpn) => `<tr ${parEpn ? `class="cliquable" data-epn="${esc(l.epn_cle)}" title="Afficher le tableau de bord de cet EPN"` : ""}>
       <td class="texte"><b>${esc(parEpn ? l.court : l.libelle)}</b><div class="sous-ligne">${esc(parEpn ? l.tutelle : `${l.epn} EPN`)}</div></td>
       <td>${montant(l.credits, u, false)}</td><td>${montant(l.execution, u, false)}</td>
@@ -395,7 +397,7 @@ async function pageTableau() {
       <td>${ecartHtml(l.ecart)}</td><td class="centre">${statutHtml(l.statut, l.couleur)}</td></tr>`;
   const ligneTotal = `<tr class="total"><td class="texte">Total</td><td>${montant(tot.credits, u, false)}</td><td>${montant(tot.execution, u, false)}</td><td>${pct(tot.taux)}</td><td>${ecartHtml(tot.ecart_net)}</td><td class="centre">–</td></tr>`;
   const sources = [...new Set(d.lignes.map(l => l.source).filter(Boolean))];
-  const enTete = `<tr><th id="col-detail">${unEpn ? "Catégorie de dépense" : "EPN"}</th><th>Crédits<small>${esc(u.libelle)}</small></th><th>Exécution<small>${esc(u.libelle)}</small></th><th>Taux<small>%</small></th><th>Écart<small>${esc(u.libelle)}</small></th><th>Statut</th></tr>`;
+  const enTete = `<tr><th id="col-detail">${unEpn ? "Catégorie de dépense" : "EPN"}</th><th>Crédits<small>FCFA</small></th><th>Exécution<small>FCFA</small></th><th>Taux<small>%</small></th><th>Écart<small>FCFA</small></th><th>Statut</th></tr>`;
   const pied = `<p class="aide" style="margin:10px 0 0">Source des montants : ${esc(sources.join(" ; ") || "—")}. Taux attendu à la fin de la période : ${nf0.format(d.attendu)} % (statut « OK » à partir de ${nf0.format(d.objectif)} %).</p>`;
   const detail = unEpn
     ? `<div class="panneau"><h2>${icone("tableau")}Exécution par catégorie de dépense</h2>
@@ -419,7 +421,7 @@ async function pageTableau() {
   const sous = unEpn ? `${esc(d.epn.epn)}${d.epn.tutelle ? " · " + esc(d.epn.tutelle) : ""} · <a class="lien-fiche" href="#/epn/${encodeURIComponent(d.epn.cle)}">${icone("dossier")}Fiche et analyses de l'EPN</a>`
     : "Ensemble des EPN · analyse des rapports des contrôleurs budgétaires";
   contenu().innerHTML = entete(titre, sous, actions)
-    + kpis + `<div class="grille-3">${evolution}${panneauRatios}${synthese}</div>` + `<div class="grille-2">${detail}${graph}</div>`
+    + kpis + `<div class="grille-3">${evolution}${panneauRatios}${synthese}</div>` + detail + graph
     + panneauDifficultesHtml(d.difficultes);
   brancherDifficultes();
 
@@ -658,19 +660,29 @@ function brancherDifficultes() {
 }
 
 /* ------------------------------------------------------------------ nature économique */
-function svgNatures(items, u, L) {
+function svgNatures(items, u, L, recettes = false) {
   const g = Math.min(330, Math.round(L * 0.42)), d = 118, h0 = 6, hb = 24, ecart = 12, lw = Math.max(80, L - g - d);
   const H = h0 + items.length * (hb + ecart);
   const max = Math.max(...items.map(x => x.actuel || 0), 1);
   const car = Math.max(14, Math.floor((g - 14) / 7.4));
   let s = `<svg viewBox="0 0 ${L} ${H}" width="${L}" height="${H}" ${TXT} role="img" aria-label="Principales natures économiques">`;
+  // Début de libellé commun à toutes les natures (ex. « Transferts reçus du budget général- ») : omis à l'affichage,
+  // pour que la partie qui les distingue reste lisible.
+  const mots = items.map(x => String(x.libelle || "").split(" "));
+  let k = 0;
+  while (items.length > 1 && mots.every(m => m.length > k + 1 && m[k] === mots[0][k])) k++;
+  const commun = k ? mots[0].slice(0, k).join(" ") : "";
   items.forEach((x, i) => {
     const y = h0 + i * (hb + ecart), w = v => lw * (v || 0) / max;
     const lib = `${x.code} ${x.libelle}`;
-    s += `<text x="${g - 10}" y="${y + hb / 2 + 4}" text-anchor="end" font-size="12.5" fill="#0f1e36"><title>${esc(lib)}</title>${esc(lib.length > car ? lib.slice(0, car - 1) + "…" : lib)}</text>`;
-    s += `<rect x="${g}" y="${y}" width="${w(x.actuel)}" height="${hb}" rx="3" fill="#dbe7fb"><title>Crédits actuels : ${montant(x.actuel, u)}</title></rect>`;
-    s += `<rect x="${g}" y="${y + 3}" width="${w(x.engage)}" height="8" rx="2" fill="#1565d8"><title>Engagements : ${montant(x.engage, u)}</title></rect>`;
-    s += `<rect x="${g}" y="${y + 13}" width="${w(x.realise)}" height="8" rx="2" fill="#f59e0b"><title>Ordonnancements : ${montant(x.realise, u)}</title></rect>`;
+    const court = commun.length >= 12 ? `${x.code} …${String(x.libelle).slice(commun.length).replace(/^[\s\-–:,]+/, " ")}` : lib;
+    s += `<text x="${g - 10}" y="${y + hb / 2 + 4}" text-anchor="end" font-size="12.5" fill="#0f1e36"><title>${esc(lib)}</title>${esc(court.length > car ? court.slice(0, car - 1) + "…" : court)}</text>`;
+    s += `<rect x="${g}" y="${y}" width="${w(x.actuel)}" height="${hb}" rx="3" fill="#dbe7fb"><title>${recettes ? "Prévisions" : "Crédits actuels"} : ${montant(x.actuel, u)}</title></rect>`;
+    if (recettes) s += `<rect x="${g}" y="${y + 6}" width="${w(x.realise)}" height="12" rx="2" fill="#f59e0b"><title>Recouvrements : ${montant(x.realise, u)}</title></rect>`;
+    else {
+      s += `<rect x="${g}" y="${y + 3}" width="${w(x.engage)}" height="8" rx="2" fill="#1565d8"><title>Engagements : ${montant(x.engage, u)}</title></rect>`;
+      s += `<rect x="${g}" y="${y + 13}" width="${w(x.realise)}" height="8" rx="2" fill="#f59e0b"><title>Ordonnancements : ${montant(x.realise, u)}</title></rect>`;
+    }
     const taux = x.actuel ? (x.realise || 0) / x.actuel * 100 : null;
     s += `<text x="${g + w(x.actuel) + 8}" y="${y + hb / 2 + 4}" font-size="12" font-weight="700" fill="#0f1e36">${nf1.format((x.actuel || 0) / u.diviseur)}<tspan font-weight="400" fill="#56657a"> · ${taux == null ? "—" : nf0.format(taux) + " %"}</tspan></text>`;
   });
@@ -696,8 +708,8 @@ async function pageNatures() {
   const cartes = `<div class="kpis">
     ${carteKpi("couches", "fond-bleu", "Natures dotées", `${d.natures}`, `<div class="delta">sur ${accord(inscrites, "nature inscrite", "natures inscrites")}</div>`)}
     ${carteKpi("coche", "fond-vert", "Taux d'engagement", pct(t.taux_engagement), `<div class="delta">ordonnancé : ${pct(t.taux)}</div>`)}
-    ${carteKpi("base", "fond-orange", "Crédits disponibles", montant((t.actuel || 0) - (t.engage || 0), u), `<div class="delta">non encore engagés, sur ${montant(t.actuel, u)}</div>`)}
-    ${carteKpi("alerte", "fond-rouge", "Reste à payer", montant((t.realise || 0) - (t.paye || 0), u), `<div class="delta">ordonnancé non pris en charge</div>`)}</div>`;
+    ${carteKpi("base", "fond-orange", `Crédits disponibles${UNITE_KPI}`, montant((t.actuel || 0) - (t.engage || 0), u, false), `<div class="delta">non encore engagés, sur ${montant(t.actuel, u)}</div>`)}
+    ${carteKpi("alerte", "fond-rouge", `Reste à payer${UNITE_KPI}`, montant((t.realise || 0) - (t.paye || 0), u, false), `<div class="delta">ordonnancé non pris en charge</div>`)}</div>`;
   const points = d.points.map(p => {
     const ic = p.niveau === "critique" ? "exclamation" : p.niveau === "attention" ? "alerte" : "info";
     return `<div class="point"><span class="pastille ${p.niveau}">${icone(ic)}</span><div><div class="titre">${esc(p.titre)}</div><div class="detail">${insecable(p.detail)}</div></div></div>`;
@@ -717,13 +729,13 @@ async function pageNatures() {
       ${dep ? `<td>${montant(g.engage, u, false)}</td>` : ""}<td>${montant(g.realise, u, false)}</td><td>${pct(g.taux)}</td><td></td></tr>`;
   const tableDep = d.categories.length ? `<div class="panneau" style="margin-top:16px"><h2>${icone("tableau")}Dépenses par nature économique
       <span class="droite onglets compact" id="filtre-natures"><button data-f="toutes" class="actif">Toutes</button><button data-f="examiner">À examiner</button><button data-f="supprimees">Crédits supprimés</button></span></h2>
-    <div class="defilant"><table class="donnees" id="table-natures"><thead><tr><th>Nature</th><th>Libellé</th><th>Crédits initiaux<small>${esc(u.libelle)}</small></th><th>Crédits actuels<small>${esc(u.libelle)}</small></th><th>Engagements<small>${esc(u.libelle)}</small></th><th>Ordonnancements<small>${esc(u.libelle)}</small></th><th>Taux<small>%</small></th><th>Statut</th></tr></thead>
+    <div class="defilant"><table class="donnees" id="table-natures"><thead><tr><th>Nature</th><th>Libellé</th><th>Crédits initiaux<small>FCFA</small></th><th>Crédits actuels<small>FCFA</small></th><th>Engagements<small>FCFA</small></th><th>Ordonnancements<small>FCFA</small></th><th>Taux<small>%</small></th><th>Statut</th></tr></thead>
     <tbody>${d.categories.map(g => ligneGroupe(g, true) + g.natures.map(n => ligneNature(n, true)).join("")).join("")}
       <tr class="total"><td></td><td class="texte">Total des dépenses</td><td>${montant(t.initial, u, false)}</td><td>${montant(t.actuel, u, false)}</td><td>${montant(t.engage, u, false)}</td><td>${montant(t.realise, u, false)}</td><td>${pct(t.taux)}</td><td></td></tr></tbody></table></div>
     <p class="aide pied">Taux d'exécution : ordonnancements / crédits actuels. Statuts : « Dépassement » (engagements ou ordonnancements supérieurs aux crédits), « Non engagé » (crédits sans aucun engagement), « Crédits supprimés » (crédits initiaux ramenés à zéro), sinon selon le taux attendu à la fin de la période.</p></div>` : "";
   const tr = d.total_recettes;
   const tableRec = d.recettes.length ? `<div class="panneau" style="margin-top:16px"><h2>${icone("base")}Recettes par nature économique</h2>
-    <div class="defilant"><table class="donnees"><thead><tr><th>Nature</th><th>Libellé</th><th>Prévisions initiales<small>${esc(u.libelle)}</small></th><th>Prévisions actuelles<small>${esc(u.libelle)}</small></th><th>Recouvrements<small>${esc(u.libelle)}</small></th><th>Taux<small>%</small></th><th>Statut</th></tr></thead>
+    <div class="defilant"><table class="donnees"><thead><tr><th>Nature</th><th>Libellé</th><th>Prévisions initiales<small>FCFA</small></th><th>Prévisions actuelles<small>FCFA</small></th><th>Recouvrements<small>FCFA</small></th><th>Taux<small>%</small></th><th>Statut</th></tr></thead>
     <tbody>${d.recettes.map(g => ligneGroupe(g, false) + g.natures.map(n => ligneNature(n, false)).join("")).join("")}
       <tr class="total"><td></td><td class="texte">Total des recettes</td><td>${montant(tr.initial, u, false)}</td><td>${montant(tr.actuel, u, false)}</td><td>${montant(tr.realise, u, false)}</td><td>${pct(tr.taux)}</td><td></td></tr></tbody></table></div></div>` : "";
   contenu().innerHTML = tete + cartes + `<div class="grille-2-egal haut">${panneauPoints}${panneauLecture}</div>` + graph + tableDep + tableRec;
@@ -1073,9 +1085,33 @@ async function pageComparaison() {
   const mt = v => v == null ? '<span class="nc">—</span>' : montant(v, u, false);
   const basePeriode = c => c.base_periode != null && c.base_periode < c.nb ? `<div class="sous-ligne">sur ${accord(c.base_periode, "EPN suivi", "EPN suivis")} au trimestre précédent</div>` : "";
   const taux = (v, attendu) => v == null ? '<span class="nc">—</span>' : `${pct(v)}${attendu != null ? `<div class="sous-ligne">attendu ${nf0.format(attendu)} %</div>` : ""}`;
+  // Recouvrement par nature économique de recettes : groupes de ressources, puis natures (code à 6 chiffres)
+  const groupesRec = d.natures_recettes || [];
+  const avecNatures = c => c.present && Object.keys(c.recettes_natures || {}).length > 0;
+  const libNature = l => l && l === l.toUpperCase() ? l.charAt(0) + l.slice(1).toLowerCase() : l;
+  const celluleRecette = (c, n, groupe = false) => {
+    if (!c.present) return '<span class="nc">—</span>';
+    if (!avecNatures(c)) return `<span class="nc">${c.natures_a_reanalyser ? "à réanalyser" : "—"}</span>`;
+    if (!n) return `<span class="nc">${groupe ? "—" : "non inscrite"}</span>`;
+    if (!n.prevu && !n.realise) return '<span class="nc">non prévue</span>';
+    const nonRecouvree = n.prevu && !n.realise;
+    const auTrimestre = !groupe && n.periode != null && c.rang > 1 ? `<div class="sous-ligne">${signe(n.periode, montant(Math.abs(n.periode), u, false))} au trimestre</div>` : "";
+    return `<span class="${nonRecouvree ? "taux-ko" : ""}">${mt(n.realise || 0)}</span>
+      <div class="sous-ligne">${n.prevu ? `${n.taux == null ? "—" : nf1.format(n.taux) + " %"} de ${montant(n.prevu, u, false)}` : "sans prévision"}</div>${auTrimestre}`;
+  };
+  const sectionNaturesRecettes = groupesRec.length ? section("Recouvrement par nature économique de recettes")
+    + `<tr class="note"><td class="texte" colspan="${cols.length + 1}"><span class="sous-ligne">Recouvrements cumulés ; sous le montant : taux de recouvrement des prévisions${presents.some(c => c.rang > 1) ? " et montant recouvré au cours du trimestre" : ""}.</span></td></tr>`
+    + groupesRec.map(g => `<tr class="sous-total"><td class="texte">${esc(g.libelle)}</td>${cols.map(c => `<td>${celluleRecette(c, (c.recettes_groupes || {})[g.groupe], true)}</td>`).join("")}</tr>`
+      + g.natures.map(n => `<tr class="nature-rec"><td class="texte"><span class="code-nature">${esc(n.code)}</span>${esc(libNature(n.libelle))}</td>${cols.map(c => `<td>${celluleRecette(c, (c.recettes_natures || {})[n.code])}</td>`).join("")}</tr>`).join("")).join("")
+    : (presents.some(c => c.natures_a_reanalyser) ? section("Recouvrement par nature économique de recettes")
+      + `<tr><td class="texte" colspan="${cols.length + 1}"><span class="nc">Détail par nature non disponible : relancez l'analyse des rapports avec cette version (situation d'exécution des recettes SIGOBE de préférence).</span></td></tr>` : "");
+  const derniereNat = [...presents].reverse().find(avecNatures);
+  const pointsNat = derniereNat ? Object.entries(derniereNat.recettes_natures).filter(([, n]) => n.prevu)
+    .sort((a, b) => b[1].prevu - a[1].prevu).slice(0, 8)
+    .map(([code, n]) => ({ code, libelle: libNature(n.libelle), actuel: n.prevu, realise: n.realise || 0 })) : [];
   const categories = [["personnel", "Personnel"], ["biens_services", "Biens et services"], ["transferts", "Transferts"], ["investissement", "Investissements"]]
     .filter(([cle]) => presents.some(c => c.categories[cle]));
-  const tableau = `<div class="panneau"><h2>${icone("tableau")}Rapports de l'exercice ${d.annee}, trimestre par trimestre<span class="droite aide" style="margin:0">montants en ${esc(u.libelle)}</span></h2>
+  const tableau = `<div class="panneau"><h2>${icone("tableau")}Rapports de l'exercice ${d.annee}, trimestre par trimestre<span class="droite aide" style="margin:0">montants en FCFA</span></h2>
     <div class="defilant"><table class="donnees comparaison-table"><thead><tr><th>Indicateur</th>${cols.map(c => `<th ${c.present && c.ids.length === 1 ? `class="cliquable-th" data-id="${c.ids[0]}" title="Voir l'analyse du rapport"` : ""}>${esc(c.code === "A" ? "Annuel" : c.code)}<small>${c.present ? (c.nb > 1 ? accord(c.nb, "rapport", "rapports") : "analysé") : c.a_venir ? `à venir${c.echeance ? " · " + dateFr(c.echeance).slice(0, 5) : ""}` : "non analysé"}</small></th>`).join("")}</tr></thead><tbody>
       ${section("Crédits et exécution des dépenses")}
       ${ligne("Crédits (budget actuel)", c => mt(c.credits))}
@@ -1089,6 +1125,7 @@ async function pageComparaison() {
       ${ligne("Recouvrements (cumul)", c => mt(c.recettes_realisees))}
       ${ligne("dont recouvrés au cours de la période", c => mt(c.recettes_periode) + basePeriode(c))}
       ${ligne("Taux de recouvrement", c => taux(c.taux_recouvrement))}
+      ${sectionNaturesRecettes}
       ${categories.length ? section("Dépenses par catégorie (ordonnancements)") : ""}
       ${categories.map(([cle, lib]) => ligne(lib, c => c.categories[cle] ? `${mt(c.categories[cle].realise)}<div class="sous-ligne">${c.categories[cle].taux == null ? "—" : nf0.format(c.categories[cle].taux) + " % des crédits"}</div>` : '<span class="nc">—</span>')).join("")}
       ${section("Ratios de gestion")}
@@ -1106,9 +1143,11 @@ async function pageComparaison() {
       <div class="panneau"><h2>${icone("base")}Recettes prévues et recouvrées</h2><div class="legende" style="justify-content:flex-end"><span><i style="background:#1565d8"></i>Prévisions</span><span><i style="background:#f59e0b"></i>Recouvrements</span></div><div class="graphique" id="g-recettes"></div></div>
       <div class="panneau"><h2>${icone("courbe")}Taux d'exécution et de recouvrement</h2><div class="legende" style="justify-content:flex-end"><span><i class="rond" style="background:#1565d8"></i>Exécution des dépenses</span><span><i class="rond" style="background:#1f9d4c"></i>Recouvrement des recettes</span></div><div class="graphique" id="g-taux"></div></div>
       <div class="panneau"><h2>${icone("rapports")}Qualité des rapports</h2><div class="legende" style="justify-content:flex-end"><span><i class="rond" style="background:#9b59b6"></i>Forme</span><span><i class="rond" style="background:#f59e0b"></i>Fond</span></div><div class="graphique" id="g-qualite"></div></div></div>` : "";
+  const grapheNatures = pointsNat.length ? `<div class="panneau" style="margin-top:16px"><h2>${icone("couches")}Recouvrement par nature de recettes<span class="droite aide" style="margin:0">${esc(derniereNat.code === "A" ? "rapport annuel" : "rapport du " + derniereNat.code + " " + d.annee)}</span></h2>
+      <div class="legende" style="justify-content:flex-start"><span><i style="background:#dbe7fb"></i>Prévisions</span><span><i style="background:#f59e0b"></i>Recouvrements</span><span>Prévisions en ${esc(u.libelle)} · taux de recouvrement</span></div><div class="graphique" id="g-natures-rec"></div></div>` : "";
   const sujet = d.epn === "tous" ? "Ensemble des EPN, trimestre par trimestre" : `${esc(d.fiche ? d.fiche.epn : "")} · les rapports de l'exercice côte à côte`;
   contenu().innerHTML = entete(d.epn === "tous" ? "Comparaison budgétaire" : `Comparaison budgétaire <span class="titre-epn">${esc(d.fiche ? d.fiche.court : "")}</span>`, sujet, choixEpn + choixAnnee)
-    + `<div class="panneau lecture-comparaison"><div class="lecture"><p>${insecable(d.lecture)}</p></div></div>` + tableau + graphes;
+    + `<div class="panneau lecture-comparaison"><div class="lecture"><p>${insecable(d.lecture)}</p></div></div>` + tableau + graphes + grapheNatures;
   if (presents.length) {
     const trims = presents.map(c => ({ libelle: c.code === "A" ? "Annuel" : c.code, prevu: c.credits, realise: c.execution }));
     graphique(document.getElementById("g-depenses"), L => svgGroupes(trims, u, L));
@@ -1118,6 +1157,7 @@ async function pageComparaison() {
     graphique(document.getElementById("g-qualite"), L => svgSeries(presents.map(c => ({ periode: c.code === "A" ? "Annuel" : c.code, forme: c.forme, fond: c.fond })),
       [{ cle: "forme", libelle: "Forme", couleur: "#9b59b6" }, { cle: "fond", libelle: "Fond", couleur: "#f59e0b" }], L));
   }
+  if (pointsNat.length) graphique(document.getElementById("g-natures-rec"), L => svgNatures(pointsNat, u, L, true));
   document.querySelectorAll(".cliquable-th").forEach(th => th.onclick = () => ouvrirRapport(+th.dataset.id));
   const sel = document.getElementById("epn");
   if (sel) sel.onchange = () => {

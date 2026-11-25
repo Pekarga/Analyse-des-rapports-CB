@@ -14,6 +14,7 @@ from datetime import date
 from . import natures, ratios
 from .controles import DEFAUT_DELAIS, jour_mois
 from .historique import NATURES, epn_du, epns, libelle_periode, lister, periodes
+from .texte import montant_fcfa
 
 TAUX_ATTENDU = {1: 25.0, 2: 50.0, 3: 75.0, 4: 100.0, 5: 100.0}
 
@@ -391,6 +392,32 @@ def _somme(valeurs):
     return sum(v) if v else None
 
 
+def _taux_sur(num, den):
+    return num / den * 100 if den and num is not None else None
+
+
+def _recettes_par_nature(recs: list[dict]) -> dict:
+    """Recouvrement par nature économique de recettes (code à 6 chiffres) et par groupe de ressources, cumulé sur les
+    rapports de la colonne. Les analyses antérieures à la version 3.3 n'ont pas ce détail (`natures_a_reanalyser`)."""
+    listes = [(r["donnees"].get("natures") or {}).get("recettes") or [] for r in recs]
+    avec = [x for x in listes if x]
+    out, groupes = {}, {}
+    for n in (natures.fusionner(avec) if avec else []):
+        prevu = n.get("actuel") if n.get("actuel") is not None else n.get("initial")
+        realise = n.get("realise")
+        out[n["code"]] = {"libelle": n["libelle"], "groupe": n.get("categorie") or "", "prevu": prevu, "realise": realise,
+                          "taux": _taux_sur(realise, prevu)}
+        g = groupes.setdefault(n.get("categorie") or "", {"prevu": None, "realise": None})
+        for k, v in (("prevu", prevu), ("realise", realise)):
+            if v is not None:
+                g[k] = (g[k] or 0) + v
+    for g in groupes.values():
+        g["taux"] = _taux_sur(g["realise"], g["prevu"])
+    sources = sorted({(r["donnees"].get("natures") or {}).get("source_recettes") for r in recs} - {None, ""})
+    return {"recettes_natures": out, "recettes_groupes": groupes, "natures_a_reanalyser": len(recs) - len(avec),
+            "source_natures_recettes": sources}
+
+
 def _colonne(code: str, rang: int, annee: int, nom: str, recs: list[dict], parametres: dict) -> dict:
     col = {"code": code, "rang": rang, "libelle": f"{code} {annee}" if rang < 5 else f"Exercice {annee}",
            "nom": nom, "present": bool(recs)}
@@ -412,7 +439,8 @@ def _colonne(code: str, rang: int, annee: int, nom: str, recs: list[dict], param
         "credits": t["credits"], "engagements": _somme(l["engagements"] for l in lignes), "execution": t["execution"],
         "taux": t["taux"], "attendu": TAUX_ATTENDU.get(rang, 100.0), "statut": statut, "couleur": couleur,
         "recettes_prevues": rp, "recettes_realisees": rr, "taux_recouvrement": rr / rp * 100 if rp and rr is not None else None,
-        "categories": categories, "ratios": {x["code"]: x["valeur"] for x in ratios.agreger(recs)},
+        "categories": categories, **_recettes_par_nature(recs),
+        "ratios": {x["code"]: x["valeur"] for x in ratios.agreger(recs)},
         "forme": sum(r["score_forme"] for r in recs) / len(recs),
         "fond": _somme(r["score_fond"] for r in recs) / len([r for r in recs if r["score_fond"] is not None])
         if any(r["score_fond"] is not None for r in recs) else None,
@@ -476,11 +504,35 @@ def comparaison_epn(epn: str | None, annee: int | None, parametres: dict) -> dic
                     ecarts = [actuels[k][cle_m] - precedents[k][cle_m] for k in communs
                               if actuels[k].get(cle_m) is not None and precedents[k].get(cle_m) is not None]
                     c[cle_p] = sum(ecarts) if ecarts else None
+            # Recouvrement du trimestre par nature : seulement si les deux colonnes portent sur les mêmes EPN
+            if c["rang"] == 1 or (prec and prec["present"] and set(par_epn[c["rang"]]) == set(par_epn[prec["rang"]])
+                                  and not c["natures_a_reanalyser"] and not prec["natures_a_reanalyser"]):
+                for cle_n, n in c["recettes_natures"].items():
+                    avant = (prec["recettes_natures"].get(cle_n) or {}).get("realise") if c["rang"] > 1 else 0
+                    if c["rang"] > 1 and avant is None and cle_n not in prec["recettes_natures"]:
+                        avant = 0  # nature apparue au cours du trimestre
+                    n["periode"] = n["realise"] - avant if n["realise"] is not None and avant is not None else None
     fiche = next((e for e in liste if e["cle"] == epn), None)
     valeurs = [c.get("credits") for c in colonnes] + [c.get("recettes_prevues") for c in colonnes]
     u = unite(valeurs)
     return {"vide": False, "epns": liste, "epn": epn, "fiche": fiche, "annees": annees, "annee": annee,
-            "colonnes": colonnes, "unite": u, "lecture": _lecture_comparaison(colonnes, fiche, annee, u)}
+            "colonnes": colonnes, "unite": u, "natures_recettes": _liste_natures_recettes(colonnes),
+            "lecture": _lecture_comparaison(colonnes, fiche, annee, u)}
+
+
+def _liste_natures_recettes(colonnes: list[dict]) -> list[dict]:
+    """Groupes de ressources et natures de recettes rencontrés dans les rapports de l'exercice, dans l'ordre du
+    budget (ressources du budget général, ressources propres, autres ressources, non classées), puis par code."""
+    vus: dict[str, dict] = {}
+    for c in colonnes:
+        for code, n in (c.get("recettes_natures") or {}).items():
+            vus.setdefault(code, {"code": code, "libelle": n["libelle"], "groupe": n["groupe"]})
+    out = []
+    for code_g, libelle_g in natures.GROUPES_RECETTES:
+        membres = sorted((n for n in vus.values() if n["groupe"] == code_g), key=lambda n: n["code"])
+        if membres:
+            out.append({"groupe": code_g, "libelle": libelle_g, "natures": membres})
+    return out
 
 
 def _statut_texte(statut: str) -> str:
@@ -490,7 +542,7 @@ def _statut_texte(statut: str) -> str:
 def _lecture_comparaison(colonnes: list[dict], fiche: dict | None, annee: int, u: dict) -> str:
     """Lecture rédigée de l'évolution d'un trimestre à l'autre."""
     def m(v):
-        return "—" if v is None else f"{v / u['diviseur']:,.1f}".replace(",", " ").replace(".", ",") + f" {u['libelle']}"
+        return montant_fcfa(v)
 
     def p(v):
         return "—" if v is None else f"{v:.1f} %".replace(".", ",")
@@ -528,6 +580,7 @@ def _lecture_comparaison(colonnes: list[dict], fiche: dict | None, annee: int, u
                            + f" (statut au {b['code']} : {_statut_texte(b['statut'])}).")
         if a.get("taux_recouvrement") is not None and b.get("taux_recouvrement") is not None:
             phrases.append(f"Le taux de recouvrement des recettes passe de {p(a['taux_recouvrement'])} à {p(b['taux_recouvrement'])}.")
+        phrases += _lecture_natures_recettes(presents, m, p)
         if a.get("forme") is not None and b.get("forme") is not None:
             ecart = b["forme"] - a["forme"]
             tendance = "s'améliore" if ecart >= 2 else "se dégrade" if ecart <= -2 else "reste stable"
@@ -536,8 +589,34 @@ def _lecture_comparaison(colonnes: list[dict], fiche: dict | None, annee: int, u
         if b.get("taux") is not None:
             phrases.append(f"Au {b['code']}, le taux d'exécution est de {p(b['taux'])} pour un taux attendu de {p(b['attendu'])} "
                            f"(statut : {_statut_texte(b['statut'])}).")
+        phrases += _lecture_natures_recettes(presents, m, p)
         phrases.append("La comparaison s'enrichira à mesure de l'analyse des rapports des autres trimestres.")
     return " ".join(phrases)
+
+
+def _lecture_natures_recettes(presents: list[dict], m, p) -> list[str]:
+    """Recouvrement par nature de recettes au dernier rapport (natures les plus dotées, recettes non recouvrées)."""
+    avec = [c for c in presents if c.get("recettes_natures")]
+    if not avec:
+        return []
+    b = avec[-1]
+    dotees = sorted((n for n in b["recettes_natures"].values() if n["prevu"]), key=lambda n: -n["prevu"])
+    if not dotees:
+        return []
+    def lib(n):
+        return n["libelle"].capitalize() if n["libelle"].isupper() else n["libelle"]
+    principales = [n for n in dotees if n["realise"]][:3]
+    phrases = []
+    if principales:
+        phrases.append(f"Par nature de recettes, au {b['code']} : "
+                       + " ; ".join(f"{lib(n)}, {p(n['taux'])} recouvrés sur {m(n['prevu'])} prévus" for n in principales) + ".")
+    sans = [n for n in dotees if not n["realise"]]
+    if sans:
+        phrases.append(f"Aucun recouvrement au {b['code']} sur : "
+                       + " ; ".join(f"{lib(n)} ({m(n['prevu'])} prévus)" for n in sans[:3])
+                       + (f" et {len(sans) - 3} autre{'s' if len(sans) > 4 else ''} nature{'s' if len(sans) > 4 else ''}" if len(sans) > 3 else "")
+                       + ".")
+    return phrases
 
 
 def toutes_alertes(periode_cle: str | None, parametres: dict, epn: str | None = None) -> dict:

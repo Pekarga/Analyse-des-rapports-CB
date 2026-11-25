@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 
-from .texte import normaliser
+from .texte import montant_fcfa, normaliser
 
 CATEGORIES = (("personnel", "Personnel"), ("biens_services", "Biens et services"), ("transferts", "Transferts"),
               ("investissement", "Investissements"), ("", "Non classées"))
@@ -126,10 +126,8 @@ def statut_nature(n: dict, rang: int, parametres: dict) -> tuple[str, str]:
 
 
 def _m(v: float | None) -> str:
-    """Montant en millions de FCFA, pour les textes."""
-    if v is None:
-        return "—"
-    return f"{v / 1e6:,.1f}".replace(",", " ").replace(".", ",") + " M FCFA"
+    """Montant en FCFA, en entier avec séparateur de milliers, pour les textes."""
+    return montant_fcfa(v)
 
 
 def _p(v: float | None) -> str:

@@ -82,6 +82,13 @@ def decimales(valeur) -> int:
     return len(m.group(1))
 
 
+def montant_fcfa(v: float | None) -> str:
+    """Montant en FCFA écrit en entier, avec séparateur de milliers insécable : « 803 512 450 FCFA »."""
+    if v is None:
+        return "—"
+    return f"{v:,.0f}".replace(",", "\u00a0") + "\u00a0FCFA"
+
+
 def format_montant(v: float | None) -> str:
     if v is None:
         return "—"

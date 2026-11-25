@@ -706,6 +706,16 @@ def test_tableau_de_bord_et_comparaison_par_epn(rapports, references, tmp_path, 
     assert [col["present"] for col in c["colonnes"]] == [True, True, True, False]
     t1, t2 = c["colonnes"][0], c["colonnes"][1]
     assert t1["execution_periode"] == t1["execution"] and t2["execution_periode"] == t2["execution"] - t1["execution"]
+    # Recouvrement par nature économique de recettes : groupes de ressources, natures, recouvrement du trimestre
+    assert c["natures_recettes"] and all(g["natures"] for g in c["natures_recettes"])
+    code = c["natures_recettes"][0]["natures"][0]["code"]
+    n1, n2 = t1["recettes_natures"][code], t2["recettes_natures"][code]
+    assert n1["periode"] == n1["realise"] and n2["periode"] == pytest.approx(n2["realise"] - n1["realise"])
+    assert n2["taux"] == pytest.approx(n2["realise"] / n2["prevu"] * 100) and t2["natures_a_reanalyser"] == 0
+    groupe = t2["recettes_groupes"][c["natures_recettes"][0]["groupe"]]
+    assert groupe["realise"] == pytest.approx(sum(n["realise"] or 0 for n in t2["recettes_natures"].values()
+                                                  if n["groupe"] == c["natures_recettes"][0]["groupe"]))
+    assert "Par nature de recettes, au T3" in c["lecture"]
     # T4 2099 : date limite (15/01/2100) non atteinte, le rapport est « à venir » et non manquant
     assert "3 rapports trimestriels" in c["lecture"] and "T4 à venir (date limite : 15/01/2100)" in c["lecture"]
     assert "manque" not in c["lecture"]
@@ -728,8 +738,11 @@ def test_tableau_de_bord_et_comparaison_par_epn(rapports, references, tmp_path, 
     con.close()
     n = tableau.analyse_natures("2099-T1", cle, params)
     assert n["non_disponible"] and n["choix"] == cle and n["a_reanalyser"] == 1
+    apres = tableau.comparaison_epn(cle, 2099, params)["colonnes"]
+    assert apres[0]["natures_a_reanalyser"] == 1 and not apres[0]["recettes_natures"]
+    assert "periode" not in apres[1]["recettes_natures"][code]  # T1 sans détail : pas de recouvrement du trimestre
     tous = tableau.comparaison_epn("tous", 2099, params)
-    c1, c2 = tous["colonnes"][0], tous["colonnes"][1]
+    c2 = tous["colonnes"][1]
     assert c2["nb"] == 2 and c2["base_periode"] == 1
     assert c2["execution_periode"] == pytest.approx(t2["execution"] - t1["execution"])
     assert "Le nombre de rapports analysés varie d'un trimestre à l'autre (1 au T1, 2 au T2, 1 au T3)" in tous["lecture"]
