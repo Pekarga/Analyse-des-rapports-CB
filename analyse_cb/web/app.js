@@ -1069,6 +1069,93 @@ function svgSeries(points, series, L, max = 100) {
   });
   return s + "</svg>";
 }
+/* Graphiques de la comparaison (barres en dégradé, anneaux, qualité par niveau) */
+const QUALITE = [["bonne", "Bonne", "#2563eb"], ["moyenne", "Moyenne", "#f39c33"], ["faible", "Faible", "#43a047"], ["tres_faible", "Très faible", "#8e44ad"]];
+function niveauQualite(v, sq) {
+  return v >= sq.bonne ? QUALITE[0] : v >= sq.moyenne ? QUALITE[1] : v >= 25 ? QUALITE[2] : QUALITE[3];
+}
+const DEGRADES = `<defs><linearGradient id="dg-bleu" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3b82f6"/><stop offset="1" stop-color="#1e40af"/></linearGradient>
+  <linearGradient id="dg-orange" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f9a94b"/><stop offset="1" stop-color="#ee8a1f"/></linearGradient>
+  <linearGradient id="dg-vert" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#66bb6a"/><stop offset="1" stop-color="#2e9d48"/></linearGradient></defs>`;
+function svgBarresDegrade(points, noms, u, L) {
+  const H = 300, g = 58, d = 18, h = 34, b = 40, lw = L - g - d, lh = H - h - b;
+  const max = arrondiHaut(Math.max(...points.flatMap(p => [(p.a || 0) / u.diviseur, (p.b || 0) / u.diviseur]), 0) * 1.08);
+  const y = v => h + lh - (v / max) * lh;
+  const bande = lw / Math.max(points.length, 1);
+  const lb = Math.min(140, bande * 0.34), ecart = Math.min(16, bande * 0.05);
+  let s = `<svg viewBox="0 0 ${L} ${H}" width="${L}" height="${H}" ${TXT} role="img">${DEGRADES}`;
+  for (let i = 0; i <= 4; i++) {
+    const v = max * i / 4;
+    s += `<line x1="${g}" x2="${L - d}" y1="${y(v)}" y2="${y(v)}" stroke="#e6ebf2"/>`
+      + `<text x="${g - 10}" y="${y(v) + 5}" text-anchor="end" font-size="14" fill="#1f2a3d">${nf0.format(v)}</text>`;
+  }
+  s += `<line x1="${g}" x2="${g}" y1="${h - 6}" y2="${h + lh}" stroke="#7b8aa0" stroke-width="1.5"/>`
+    + `<line x1="${g}" x2="${L - d}" y1="${h + lh}" y2="${h + lh}" stroke="#7b8aa0" stroke-width="1.5"/>`;
+  points.forEach((p, i) => {
+    const cx = g + bande * (i + 0.5);
+    [[p.a, "dg-bleu", -1, noms[0]], [p.b, "dg-orange", 1, noms[1]]].forEach(([val, grad, cote, nom]) => {
+      if (val == null) return;
+      const v = val / u.diviseur, x = cote < 0 ? cx - ecart / 2 - lb : cx + ecart / 2, top = y(v);
+      s += `<rect x="${x}" y="${top}" width="${lb}" height="${Math.max(0, h + lh - top)}" rx="4" fill="url(#${grad})"><title>${esc(nom)} ${esc(p.libelle)} : ${montant(val, u)}</title></rect>`
+        + `<text x="${x + lb / 2}" y="${top - 9}" text-anchor="middle" font-size="15" font-weight="700" fill="#0f1e36">${nf1.format(v)}</text>`;
+    });
+    s += `<text x="${cx}" y="${H - 12}" text-anchor="middle" font-size="15" fill="#0f1e36">${esc(p.libelle)}</text>`;
+  });
+  return s + `<text x="4" y="${h - 16}" font-size="11.5" fill="#56657a">${esc(u.libelle)}</text></svg>`;
+}
+function svgAnneaux(exe, rec, sous, evolution, L) {
+  const H = 270, R = Math.max(72, Math.min(112, (L - 230) / 2)), cx = R + 14, cy = H / 2;
+  const e1 = 24, r1 = R - e1 / 2, e2 = 18, r2 = R - e1 - 8 - e2 / 2;
+  const arc = (r, ep, v, couleur) => {
+    const c = 2 * Math.PI * r, f = Math.max(0, Math.min(100, v || 0)) / 100;
+    return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#dde5f0" stroke-width="${ep}"/>`
+      + (f > 0 ? `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${couleur}" stroke-width="${ep}" stroke-dasharray="${(c * f).toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 ${cx} ${cy})"/>` : "");
+  };
+  let s = `<svg viewBox="0 0 ${L} ${H}" width="${L}" height="${H}" ${TXT} role="img">${DEGRADES}
+    <linearGradient id="dg-anneau" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3b82f6"/><stop offset="1" stop-color="#1e40af"/></linearGradient>`;
+  s += arc(r1, e1, exe, "url(#dg-anneau)") + arc(r2, e2, rec, "url(#dg-vert)");
+  s += `<text x="${cx}" y="${cy + 4}" text-anchor="middle" font-size="${R > 95 ? 28 : 23}" font-weight="800" fill="#0f1e36">${exe == null ? "—" : nf1.format(exe) + " %"}</text>`
+    + `<text x="${cx}" y="${cy + 25}" text-anchor="middle" font-size="12" font-weight="600" fill="#1f2a3d">Taux d'exécution</text>`;
+  const x = cx + R + 28;
+  const bloc = (y0, couleur, titre, v, idx) => {
+    let t = `<circle cx="${x + 6}" cy="${y0 - 5}" r="6.5" fill="${couleur}"/>`
+      + `<text x="${x + 20}" y="${y0}" font-size="14" fill="#1f2a3d">${titre}</text>`
+      + `<text x="${x + 20}" y="${y0 + 26}" font-size="20" font-weight="800" fill="#0f1e36">${v == null ? "—" : nf1.format(v) + " %"}</text>`;
+    if (evolution) {  // évolution trimestre par trimestre, trois périodes par ligne
+      const morceaux = evolution.map(e => `${e[0]} ${e[idx] == null ? "—" : nf0.format(e[idx]) + " %"}`);
+      for (let k = 0; k < morceaux.length; k += 3)
+        t += `<text x="${x + 20}" y="${y0 + 46 + (k / 3) * 15}" font-size="11.5" fill="#56657a">${morceaux.slice(k, k + 3).join(" · ")}</text>`;
+    }
+    return t;
+  };
+  const pas = evolution ? (evolution.length > 3 ? 104 : 92) : 80;
+  s += bloc(cy - pas / 2 - 14, "#2563eb", "Exécution des dépenses", exe, 1) + bloc(cy + pas / 2 - 14, "#43a047", "Recouvrement des recettes", rec, 2);
+  return s + `<text x="${x}" y="${H - 8}" font-size="11.5" fill="#56657a">${esc(sous)}</text></svg>`;
+}
+function svgQualite(points, sq, L) {
+  const H = 280, g = 50, d = 18, h = 26, b = 52, lw = L - g - d, lh = H - h - b;
+  const y = v => h + lh - (Math.max(0, Math.min(100, v)) / 100) * lh;
+  const pas = lw / Math.max(points.length, 1);
+  let s = `<svg viewBox="0 0 ${L} ${H}" width="${L}" height="${H}" ${TXT} role="img">`;
+  for (let i = 0; i <= 4; i++) {
+    const v = 25 * i;
+    s += `<line x1="${g}" x2="${L - d}" y1="${y(v)}" y2="${y(v)}" stroke="#e6ebf2"/><text x="${g - 10}" y="${y(v) + 5}" text-anchor="end" font-size="14" fill="#1f2a3d">${v}</text>`;
+  }
+  s += `<line x1="${g}" x2="${g}" y1="${h - 6}" y2="${h + lh}" stroke="#7b8aa0" stroke-width="1.5"/>`
+    + `<line x1="${g}" x2="${L - d}" y1="${h + lh}" y2="${h + lh}" stroke="#7b8aa0" stroke-width="1.5"/>`;
+  points.forEach((p, i) => {
+    const cx = g + pas * (i + 0.5), dx = Math.min(70, pas * 0.24);
+    [["Forme", p.forme, cx - dx], ["Fond", p.fond, cx + dx]].forEach(([nom, v, x]) => {
+      if (v == null) return;
+      const [, niveau, couleur] = niveauQualite(v, sq);
+      s += `<circle cx="${x}" cy="${y(v)}" r="9.5" fill="${couleur}" stroke="#fff" stroke-width="2"><title>${nom} ${esc(p.periode)} : ${pct(v)} (${niveau.toLowerCase()})</title></circle>`
+        + `<text x="${x}" y="${y(v) - 16}" text-anchor="middle" font-size="14" font-weight="700" fill="#0f1e36">${nf1.format(v).replace(/,0$/, "")} %</text>`
+        + `<text x="${x}" y="${h + lh + 18}" text-anchor="middle" font-size="12" fill="#56657a">${nom}</text>`;
+    });
+    s += `<text x="${cx}" y="${H - 10}" text-anchor="middle" font-size="14" font-weight="700" fill="#0f1e36">${esc(p.periode)}</text>`;
+  });
+  return s + "</svg>";
+}
 async function pageComparaison() {
   const d = await api("/api/comparaison" + requete({ epn: etat.epn || (etat.comparaisonTous ? "tous" : ""), annee: etat.annee }));
   if (d.vide) {
@@ -1078,7 +1165,7 @@ async function pageComparaison() {
   etat.annee = d.annee;
   const u = d.unite, cols = d.colonnes, presents = cols.filter(c => c.present);
   const choixEpn = choixEpnHtml(d.epns, d.epn === "tous" ? "" : d.epn, "tous").replace('<option value="tous">', `<option value="tous" ${d.epn === "tous" ? "selected" : ""}>`);
-  const choixAnnee = `<div class="choix-periode choix-annee">${icone("calendrier")}<label for="annee">Exercice :</label><select id="annee">${d.annees.map(a => `<option value="${a}" ${a === d.annee ? "selected" : ""}>${a}</option>`).join("")}</select></div>`;
+  const choixAnnee = `<div class="choix-periode choix-annee">${icone("calendrier")}<label for="annee">Année :</label><select id="annee">${d.annees.map(a => `<option value="${a}" ${a === d.annee ? "selected" : ""}>${a}</option>`).join("")}</select></div>`;
   const val = (c, f) => c.present ? f(c) : '<span class="nc">—</span>';
   const ligne = (lib, f, aide = "") => `<tr><td class="texte">${lib}${aide ? `<div class="sous-ligne">${aide}</div>` : ""}</td>${cols.map(c => `<td>${val(c, f)}</td>`).join("")}</tr>`;
   const section = titre => `<tr class="categorie"><td class="texte" colspan="${cols.length + 1}">${titre}</td></tr>`;
@@ -1150,24 +1237,33 @@ async function pageComparaison() {
       ${ligne("Suite à donner", c => c.retours ? statutHtml(c.nb > 1 ? `${c.retours} retour${c.retours > 1 ? "s" : ""} au CB` : "Retour au CB", "rouge") : statutHtml("Exploitable", "vert"))}
       ${ligne("Source des montants", c => `<span class="sous-ligne">${esc(c.sources.join(" ; ") || "—")}</span>`)}
     </tbody></table></div></div>`;
-  const graphes = presents.length ? `<div class="grille-2-egal" style="margin-top:16px">
-      <div class="panneau"><h2>${icone("histogramme")}Crédits et ordonnancements</h2><div class="legende" style="justify-content:flex-end"><span><i style="background:#1565d8"></i>Crédits</span><span><i style="background:#f59e0b"></i>Ordonnancements</span></div><div class="graphique" id="g-depenses"></div></div>
-      <div class="panneau"><h2>${icone("base")}Recettes prévues et recouvrées</h2><div class="legende" style="justify-content:flex-end"><span><i style="background:#1565d8"></i>Prévisions</span><span><i style="background:#f59e0b"></i>Recouvrements</span></div><div class="graphique" id="g-recettes"></div></div>
-      <div class="panneau"><h2>${icone("courbe")}Taux d'exécution et de recouvrement</h2><div class="legende" style="justify-content:flex-end"><span><i class="rond" style="background:#1565d8"></i>Exécution des dépenses</span><span><i class="rond" style="background:#1f9d4c"></i>Recouvrement des recettes</span></div><div class="graphique" id="g-taux"></div></div>
-      <div class="panneau"><h2>${icone("rapports")}Qualité des rapports</h2><div class="legende" style="justify-content:flex-end"><span><i class="rond" style="background:#9b59b6"></i>Forme</span><span><i class="rond" style="background:#f59e0b"></i>Fond</span></div><div class="graphique" id="g-qualite"></div></div></div>` : "";
+  const legendeBas = items => `<div class="legende legende-bas">${items.map(([c, l, rond]) => `<span><i ${rond ? 'class="rond"' : ""} style="background:${c}"></i>${l}</span>`).join("")}</div>`;
+  const sq = d.seuils || { bonne: 75, moyenne: 50 };
+  const graphes = presents.length ? `<div class="grille-2-egal graphes-comparaison" style="margin-top:16px">
+      <div class="panneau"><h2>${icone("courbe")}Crédits et ordonnancements</h2><div class="graphique" id="g-depenses"></div>
+        ${legendeBas([["linear-gradient(#3b82f6,#1e40af)", "Crédits"], ["linear-gradient(#f9a94b,#ee8a1f)", "Ordonnancements"]])}</div>
+      <div class="panneau"><h2>${icone("tableau")}Recettes prévues et recouvrées</h2><div class="graphique" id="g-recettes"></div>
+        ${legendeBas([["linear-gradient(#3b82f6,#1e40af)", "Prévisions"], ["linear-gradient(#f9a94b,#ee8a1f)", "Recouvrements"]])}</div>
+      <div class="panneau"><h2>${icone("camembert")}Taux d'exécution et de recouvrement</h2><div class="graphique" id="g-taux"></div></div>
+      <div class="panneau"><h2>${icone("rapports")}Qualité des rapports</h2><div class="graphique" id="g-qualite"></div>
+        ${legendeBas(QUALITE.map(([cle, lib, coul]) => [coul, `<span title="${cle === "bonne" ? `${sq.bonne} % et plus` : cle === "moyenne" ? `de ${sq.moyenne} à ${sq.bonne} %` : cle === "faible" ? `de 25 à ${sq.moyenne} %` : "moins de 25 %"}">${lib}</span>`, true]))}
+        <p class="aide" style="margin:4px 0 0;text-align:center">Conformité de forme et fiabilité du fond : bonne à partir de ${sq.bonne} %, moyenne de ${sq.moyenne} à ${sq.bonne} %, faible de 25 à ${sq.moyenne} %.</p></div></div>` : "";
   const grapheNatures = pointsNat.length ? `<div class="panneau" style="margin-top:16px"><h2>${icone("couches")}Recouvrement par nature de recettes<span class="droite aide" style="margin:0">${esc(derniereNat.code === "A" ? "rapport annuel" : "rapport du " + derniereNat.code + " " + d.annee)}</span></h2>
       <div class="legende" style="justify-content:flex-start"><span><i style="background:#dbe7fb"></i>Prévisions</span><span><i style="background:#f59e0b"></i>Recouvrements</span><span>Prévisions en ${esc(u.libelle)} · taux de recouvrement</span></div><div class="graphique" id="g-natures-rec"></div></div>` : "";
   const sujet = d.epn === "tous" ? "Ensemble des EPN, trimestre par trimestre" : `${esc(d.fiche ? d.fiche.epn : "")} · les rapports de l'exercice côte à côte`;
   contenu().innerHTML = entete(d.epn === "tous" ? "Comparaison budgétaire" : `Comparaison budgétaire <span class="titre-epn">${esc(d.fiche ? d.fiche.court : "")}</span>`, sujet, choixEpn + choixAnnee)
     + `<div class="panneau lecture-comparaison"><div class="lecture"><p>${insecable(d.lecture)}</p></div></div>` + tableau + graphes + grapheNatures;
   if (presents.length) {
-    const trims = presents.map(c => ({ libelle: c.code === "A" ? "Annuel" : c.code, prevu: c.credits, realise: c.execution }));
-    graphique(document.getElementById("g-depenses"), L => svgGroupes(trims, u, L));
-    graphique(document.getElementById("g-recettes"), L => svgGroupes(presents.map(c => ({ libelle: c.code === "A" ? "Annuel" : c.code, prevu: c.recettes_prevues, realise: c.recettes_realisees })), u, L));
-    graphique(document.getElementById("g-taux"), L => svgSeries(presents.map(c => ({ periode: c.code === "A" ? "Annuel" : c.code, exe: c.taux, rec: c.taux_recouvrement })),
-      [{ cle: "exe", libelle: "Exécution", couleur: "#1565d8" }, { cle: "rec", libelle: "Recouvrement", couleur: "#1f9d4c" }], L));
-    graphique(document.getElementById("g-qualite"), L => svgSeries(presents.map(c => ({ periode: c.code === "A" ? "Annuel" : c.code, forme: c.forme, fond: c.fond })),
-      [{ cle: "forme", libelle: "Forme", couleur: "#9b59b6" }, { cle: "fond", libelle: "Fond", couleur: "#f59e0b" }], L));
+    const lib = c => c.code === "A" ? "Annuel" : c.code;
+    graphique(document.getElementById("g-depenses"), L => svgBarresDegrade(presents.map(c => ({ libelle: lib(c), a: c.credits, b: c.execution })),
+      ["Crédits", "Ordonnancements"], u, L));
+    graphique(document.getElementById("g-recettes"), L => svgBarresDegrade(presents.map(c => ({ libelle: lib(c), a: c.recettes_prevues, b: c.recettes_realisees })),
+      ["Prévisions", "Recouvrements"], u, L));
+    const dernier = presents[presents.length - 1];
+    graphique(document.getElementById("g-taux"), L => svgAnneaux(dernier.taux, dernier.taux_recouvrement,
+      `${lib(dernier) === "Annuel" ? "Rapport annuel" : "Rapport du " + lib(dernier)} ${d.annee}`,
+      presents.length > 1 ? presents.map(c => [lib(c), c.taux, c.taux_recouvrement]) : null, L));
+    graphique(document.getElementById("g-qualite"), L => svgQualite(presents.map(c => ({ periode: lib(c), forme: c.forme, fond: c.fond })), sq, L));
   }
   if (pointsNat.length) graphique(document.getElementById("g-natures-rec"), L => svgNatures(pointsNat, u, L, true));
   document.querySelectorAll(".cliquable-th").forEach(th => th.onclick = () => ouvrirRapport(+th.dataset.id));

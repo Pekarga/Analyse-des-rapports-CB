@@ -517,7 +517,9 @@ def comparaison_epn(epn: str | None, annee: int | None, parametres: dict) -> dic
     u = unite(valeurs)
     return {"vide": False, "epns": liste, "epn": epn, "fiche": fiche, "annees": annees, "annee": annee,
             "colonnes": colonnes, "unite": u, "natures_recettes": _liste_natures_recettes(colonnes),
-            "lecture": _lecture_comparaison(colonnes, fiche, annee, u)}
+            "lecture": _lecture_comparaison(colonnes, fiche, annee, u),
+            "seuils": {"bonne": (parametres.get("appreciation") or {}).get("bien", 75),
+                       "moyenne": (parametres.get("appreciation") or {}).get("passable", 50)}}
 
 
 def _liste_natures_recettes(colonnes: list[dict]) -> list[dict]:
