@@ -1061,3 +1061,95 @@ def test_canevas_et_modele_parametrables(rapports, references, tmp_path, monkeyp
 def appreciation_forme_texte(res) -> str:
     from analyse_cb.redaction import appreciation_forme
     return appreciation_forme(res)
+
+
+def generer_canevas(dossier: Path) -> Path:
+    """Canevas fictif : plan de la note n°0580, une partie nouvelle (soutenabilité financière) et un tableau 9 ; sans
+    la partie « Analyse de la gestion financière »."""
+    from docx import Document
+    d = Document()
+    for t in ("RÉPUBLIQUE DE CÔTE D'IVOIRE", "MINISTÈRE DU BUDGET ET DU PORTEFEUILLE DE L'ÉTAT",
+              "DIRECTION DU CONTRÔLE BUDGÉTAIRE"):
+        d.add_paragraph(t)
+    d.add_paragraph("Note n°0123/MBPE/DGBF/DCB du 5 janvier 2099 portant canevas de rédaction des rapports des "
+                    "Contrôleurs Budgétaires auprès des EPN (exemple fictif).")
+    d.add_paragraph("CANEVAS DE RÉDACTION DU RAPPORT DU CONTRÔLEUR BUDGÉTAIRE")
+    plan = [("INTRODUCTION", None), ("- Texte de création ;", None), ("- Rappel des missions ;", None),
+            ("- Nombre d'antennes et lieu d'installation (le cas échéant) ;", None), ("- Mode de financement de l'EPN ;", None),
+            ("- Organisation et effectif de l'EPN ;", None), ("Présentation du plan stratégique (le cas échéant)", "List Bullet"),
+            ("Présentation du Programme Annuel d'Activités", "List Bullet"),
+            ("I. PRÉSENTATION DU BUDGET", None), ("I.1 Présentation générale", None), ("I.2 Présentation des ressources", None),
+            ("I.3 Présentation des emplois", None),
+            ("II. ANALYSE DE L'EXÉCUTION DU BUDGET", None), ("II.1 Situation d'exécution du budget en recettes", None),
+            ("II.2 Situation d'exécution du budget en dépenses", None), ("II.3 Analyse des différés et rejets", None),
+            ("II.4 Analyse du résultat budgétaire", None), ("II.5 Analyse des ratios de gestion", None),
+            ("III. ANALYSE DE LA PERFORMANCE", None), ("III.1 Programme d'activités", None),
+            ("III.2 Évaluation de la réalisation des activités", None),
+            ("IV. ANALYSE DE LA SOUTENABILITÉ FINANCIÈRE", None), ("IV.1 Niveau d'endettement de l'EPN", None),
+            ("IV.2 Capacité d'autofinancement (rapport annuel)", None),
+            ("V. ÉVALUATION DES DISPOSITIFS DE CONTRÔLE", None), ("V.1 Contrôle interne budgétaire", None),
+            ("V.2 Contrôle de gestion", None), ("VI. SITUATION DU PATRIMOINE", None),
+            ("- État du patrimoine existant ;", None), ("- Point des nouvelles acquisitions ;", None),
+            ("- Mise en œuvre de la comptabilité des matières ;", None),
+            ("VII. SITUATION DE LA GOUVERNANCE DE L'EPN", None), ("VII.1 COGES / Organes de supervision", None),
+            ("VII.2 Comité de trésorerie", None), ("VIII. ANALYSE DE LA GESTION DES RISQUES", None),
+            ("IX. DIFFICULTÉS ET SUGGESTIONS", None), ("IX.1 Difficultés", None), ("IX.2 Suggestions", None),
+            ("CONCLUSION", None), ("ANNEXES", None), ("Tableaux à produire :", None)]
+    for t, style in plan:
+        d.add_paragraph(t, style=style) if style else d.add_paragraph(t)
+    for i, t in enumerate(["Budget de l'année considérée comparé à celui de l'année précédente",
+                           "Budgets des trois derniers exercices", "Présentation des ressources par nature économique",
+                           "Présentation des emplois par nature de dépenses et par activité",
+                           "Exécution détaillée du budget en recettes", "Exécution détaillée du budget en dépenses",
+                           "Principaux motifs des différés", "Principaux motifs des rejets",
+                           "Situation de l'endettement de l'EPN"], start=1):
+        d.add_paragraph(f"- Tableau {i} : {t}")
+    chemin = dossier / "Canevas_exemple.docx"
+    d.save(chemin)
+    return chemin
+
+
+def test_actualiser_canevas_depuis_document(tmp_path, monkeypatch):
+    """Un document de canevas est lu : référence, rubriques reconnues, nouvelles, absentes, tableaux ; les
+    propositions retenues s'enregistrent dans le canevas (nouvelle partie placée à sa place dans le plan)."""
+    _profil_temporaire(monkeypatch, tmp_path)
+    from analyse_cb import canevas
+    from analyse_cb.canevas_document import analyser_document, chemin_document
+    try:
+        p = analyser_document(generer_canevas(tmp_path), "Canevas_exemple.docx")
+        assert p["reference"] == "note n°0123/MBPE/DGBF/DCB du 5 janvier 2099"
+        reconnues = {r["code"] for r in p["retrouvees"]}
+        assert {"introduction", "texte_creation", "antennes", "plan_strategique", "paa", "pres_ressources", "ratios",
+                "performance", "patrimoine_existant", "compta_matieres", "coges", "comite_tresorerie", "risques",
+                "difficultes", "suggestions", "conclusion", "annexes"} <= reconnues
+        nouvelles = [(n["libelle"], n["niveau"], n["exigence"]) for n in p["nouvelles"]]
+        assert nouvelles == [("Analyse de la soutenabilité financière", 1, "obligatoire"),
+                             ("Niveau d'endettement de l'EPN", 2, "obligatoire"),
+                             ("Capacité d'autofinancement", 2, "annuel")]
+        partie = p["nouvelles"][0]
+        assert partie["apres"] == "performance" and p["nouvelles"][1]["parent"] == partie["cle"]
+        absentes = {a["code"] for a in p["absentes"]}
+        assert {"gestion_financiere", "solde_tresorerie", "creances"} <= absentes and not absentes & reconnues
+        assert [t["numero"] for t in p["tableaux"]] == list(range(1, 10)) and p["tableaux"][8]["code"] is None
+        assert next(t for t in p["tableaux"] if t["numero"] == 5)["different"]  # « Exécution détaillée … »
+        assert chemin_document().name == "Canevas_exemple.docx"
+
+        # Propositions retenues (comme le bouton « Appliquer », puis « Enregistrer le canevas »)
+        d = canevas.description()
+        rubs = [{"code": r["code"], "libelle": r["libelle"], "exigence": r["exigence"], "titre_requis": r["titre_requis"],
+                 "mots_min": r["mots_min"], "intitules": r["intitules"], "ligne": "auto"} for r in d["rubriques"]]
+        for n in p["nouvelles"]:
+            rubs.append({"code": n["cle"], "libelle": n["libelle"], "parent": n["parent"], "apres": n["apres"],
+                         "exigence": n["exigence"], "intitules": []})
+        d = canevas.enregistrer({"reference": p["reference"], "rubriques": rubs})
+        codes = [r.code for r in canevas.RUBRIQUES]
+        i = codes.index("perso_1")
+        assert canevas.RUBRIQUES[i - 1].parent == "performance" or canevas.RUBRIQUES[i - 1].code == "performance"
+        assert [(r.code, r.parent) for r in canevas.RUBRIQUES[i:i + 3]] == \
+            [("perso_1", None), ("perso_2", "perso_1"), ("perso_3", "perso_1")]
+        assert canevas.PAR_CODE["perso_3"].annuel_seulement and d["document"]["nom"] == "Canevas_exemple.docx"
+        assert canevas.reference().startswith("note n°0123")
+    finally:
+        if canevas.chemin_config().exists():
+            canevas.chemin_config().unlink()
+        canevas.actualiser(force=True)

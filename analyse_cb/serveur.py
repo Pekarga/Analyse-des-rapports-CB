@@ -30,7 +30,7 @@ from .ressources import dossier_local, dossier_ressources, dossier_utilisateur
 
 EXT_ACCEPTEES = {"rapport": (".docx", ".pdf"), "decret": (".pdf", ".docx", ".txt"),
                  "situation": (".xlsx", ".xlsm", ".csv", ".pdf", ".docx"), "logo": (".png", ".jpg", ".jpeg", ".gif", ".svg"),
-                 "modele": (".xlsx",)}
+                 "modele": (".xlsx",), "canevas": (".docx", ".pdf")}
 INSTITUTION_DEFAUT = {"ligne1": "Ministère des Finances et du Budget", "ligne2": "Côte d'Ivoire"}
 JOURNAL = logging.getLogger("analyse_cb.serveur")
 
@@ -239,6 +239,12 @@ class Application:
             return canevas.enregistrer(data)
         if chemin == "/api/canevas/reinitialiser":
             return canevas.reinitialiser()
+        if chemin == "/api/canevas/analyser":
+            from .canevas_document import analyser_document
+            f = self.fichiers.get(str(data.get("id") or ""))
+            if not f or f["categorie"] != "canevas":
+                raise ValueError("Déposez d'abord le document du canevas (Word ou PDF).")
+            return analyser_document(f["chemin"], f["nom"])
         if chemin == "/api/modele/importer":
             f = self.fichiers.get(str(data.get("id") or ""))
             if not f or f["categorie"] != "modele":
@@ -380,6 +386,12 @@ class Application:
             if not dossier.exists():
                 raise ValueError(f"Le dossier n'existe plus : {dossier}")
             ouvrir_systeme(dossier)
+        elif quoi == "canevas_document":
+            from .canevas_document import chemin_document
+            chemin = chemin_document()
+            if not chemin:
+                raise ValueError("Aucun document de canevas n'a été importé.")
+            ouvrir_systeme(chemin)
         elif quoi == "chemin" and data.get("chemin"):
             ouvrir_systeme(Path(data["chemin"]))
         elif quoi == "sortie":

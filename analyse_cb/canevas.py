@@ -42,6 +42,7 @@ class Rubrique:
     ignoree: bool = False  # « non exigée » dans les Paramètres : rubrique non contrôlée
     perso: bool = False  # rubrique ajoutée dans les Paramètres
     intitules: tuple[str, ...] = ()  # intitulés ajoutés dans les Paramètres (texte simple)
+    apres: str | None = None  # partie ajoutée : placée après cette partie (sinon avant la conclusion)
 
     def __post_init__(self):
         if self.ligne_fond == -1:
@@ -338,8 +339,12 @@ def construire(cfg: dict) -> tuple[list[Rubrique], list[TableauCanevas]]:
                      cas_echeant=ex == "cas_echeant", annuel_seulement=ex == "annuel", ignoree=ex == "non_exigee",
                      ligne_forme=None, ligne_fond=None, hors_grille=True, perso=True, intitules=intitules,
                      mots_min=int(a.get("mots_min") if isinstance(a.get("mots_min"), int) else 10))
-        if parent:  # après la dernière sous-rubrique de la partie
-            pos = max(i for i, x in enumerate(rubs) if x.code == parent or x.parent == parent) + 1
+        apres = a.get("apres") if not parent and any(x.code == a.get("apres") and x.niveau == 1 for x in rubs) else None
+        if apres:
+            r = replace(r, apres=apres)
+        if parent or apres:  # après la dernière sous-rubrique de la partie
+            ref = parent or apres
+            pos = max(i for i, x in enumerate(rubs) if x.code == ref or x.parent == ref) + 1
         else:  # nouvelle partie : avant la conclusion
             pos = next((i for i, x in enumerate(rubs) if x.code == "conclusion"), len(rubs))
         rubs.insert(pos, r)
@@ -430,6 +435,7 @@ def description() -> dict:
         "niveau": r.niveau, "parent": r.parent, "exigence": exigence(r),
         "exigence_defaut": exigence(defauts[r.code]) if r.code in defauts else None,
         "titre_requis": r.titre_requis, "mots_min": r.mots_min, "intitules": list(r.intitules), "perso": r.perso,
+        "apres": r.apres,
         "ligne": r.ligne_forme, "ligne_fond": r.ligne_fond,
         "ligne_choisie": forcees.get(r.code)} for r in _ordre_affichage()]
     tableaux = [{"code": t.code, "numero": t.numero, "libelle": t.libelle, "libelle_defaut": tdefauts[t.code].libelle,
@@ -437,8 +443,10 @@ def description() -> dict:
                  "ligne_choisie": forcees.get(t.code)} for t in TABLEAUX]
     fixes = {p.ancres.get(n) for n in ("forme_global", "sommaire", "tableaux", "signature")}
     zone = p.lignes_zone("forme_global", "appreciation_forme")
+    from .canevas_document import document
     return {
         "reference": _ETAT["reference"], "reference_defaut": REFERENCE_DEFAUT, "modifie": bool(lire_config()),
+        "document": document(),
         "exigences": [{"code": c, "libelle": l} for c, l in EXIGENCES],
         "exigences_tableaux": [{"code": c, "libelle": l} for c, l in EXIGENCES_TABLEAUX],
         "rubriques": rubriques, "tableaux": tableaux,
@@ -525,10 +533,14 @@ def enregistrer(data: dict) -> dict:
             parent = renommes.get(parent, parent)
             if parent and not ((parent in defauts and defauts[parent].niveau == 1) or parent in parties_perso):
                 raise ValueError(f"Partie de rattachement inconnue pour la rubrique « {libelle} ».")
+            apres = renommes.get(item.get("apres"), item.get("apres")) if not parent else None
+            if apres and not ((apres in defauts and defauts[apres].niveau == 1) or apres in parties_perso):
+                apres = None
             if not parent:
                 parties_perso.add(code)
-            cfg["ajouts"].append({"code": code, "libelle": libelle, "parent": parent, "exigence": ex or "obligatoire",
-                                  "intitules": intitules, "mots_min": 10 if mots is None else mots})
+            cfg["ajouts"].append({"code": code, "libelle": libelle, "parent": parent, "apres": apres,
+                                  "exigence": ex or "obligatoire", "intitules": intitules,
+                                  "mots_min": 10 if mots is None else mots})
         if "ligne" in item and item["ligne"] not in (None, "", "auto"):
             lignes[code] = _entier(item["ligne"], 0, 100000) or 0
     for item in data.get("tableaux") or []:

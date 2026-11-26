@@ -1389,8 +1389,15 @@ async function pageCanevas(donnees) {
     + `<div class="panneau section-param"><h2>${icone("rapports")}Canevas en vigueur</h2>
       <div class="champ"><label for="reference-canevas">Texte qui institue le canevas</label><input id="reference-canevas" value="${esc(b.reference)}">
       <span class="note">Cité dans l'appréciation de la forme : « … examiné au regard du canevas fixé par la ${esc(b.reference)} ». Par défaut : ${esc(cv.reference_defaut)}.</span></div>
+      <div class="import-canevas">
+        <div class="depot petit" id="depot-canevas" tabindex="0" role="button">${icone("depot")}<div class="titre">Actualiser à partir d'un nouveau canevas</div>
+          <div class="aide" style="margin:0">Déposez ici la note ou le canevas de la DCB (Word ou PDF, y compris scanné)</div></div>
+        <div class="aide" style="margin:0">L'application lit le plan du document (parties, sous-parties, éléments énumérés, tableaux prescrits) et sa référence, le compare au canevas en vigueur et propose les mises à jour : vous choisissez celles à retenir, puis vous enregistrez.
+          ${cv.document ? `<div style="margin-top:8px">Dernier canevas importé : <b>${esc(cv.document.nom)}</b> (le ${dateFr(cv.document.importe_le)}) – <a href="#" id="ouvrir-doc-canevas">ouvrir</a></div>` : ""}</div>
+      </div>
       <p class="aide" style="margin:10px 0 0">Les rubriques et les tableaux ci-dessous sont recherchés dans chaque rapport analysé. <b>Exigence</b> : une rubrique « obligatoire » absente est jugée non conforme ; « le cas échéant », elle n'est exigée que si l'EPN est concerné ; « rapport annuel seulement », elle n'est exigée que dans le rapport annuel ; « non exigée », elle n'est pas contrôlée.
       <b>Intitulés</b> : titres que le CB peut employer pour la rubrique, en plus de ceux que l'application reconnaît déjà (majuscules et accents indifférents). <b>Ligne du modèle</b> : ligne du fichier d'analyse où l'appréciation de la rubrique est reportée.${cv.modifie ? " <b>Le canevas a été modifié</b> : les lignes modifiées sont signalées par un trait bleu." : ""}</p></div>
+    ${propositionsCanevasHtml(etat.propositionsCanevas)}
     <div class="panneau section-param" style="margin-top:16px"><h2>${icone("couches")}Parties et rubriques</h2>
       <div class="defilant"><table class="donnees table-canevas"><thead><tr><th>Rubrique</th><th>Exigence</th><th>Titre<br>exigé</th><th>Volume minimal<small>mots</small></th><th>Intitulés acceptés</th><th>Ligne du modèle</th></tr></thead>
       <tbody>${b.rubriques.map(ligneRub).join("")}</tbody></table></div>
@@ -1418,6 +1425,18 @@ async function pageCanevas(donnees) {
     t[ch === "ligne" ? "ligne_choisie" : ch] = lire(el, ch);
   });
   document.getElementById("reference-canevas").onchange = e => { b.reference = e.target.value; };
+  brancherDepot("depot-canevas", "canevas", [".docx", ".pdf"], async f => {
+    toast(`Lecture du canevas « ${f.nom} »…`);
+    try {
+      etat.propositionsCanevas = await post("/api/canevas/analyser", { id: f.id });
+      b.garder = true;
+      await pageCanevas(b);
+      document.getElementById("propositions-canevas").scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (err) { toast(err.message, "erreur"); }
+  });
+  const ouvrirDoc = document.getElementById("ouvrir-doc-canevas");
+  if (ouvrirDoc) ouvrirDoc.onclick = e => { e.preventDefault(); post("/api/ouvrir", { quoi: "canevas_document" }).catch(err => toast(err.message, "erreur")); };
+  brancherPropositions(b);
   document.querySelectorAll("[data-supprimer]").forEach(x => x.onclick = () => {
     const code = b.rubriques[+x.dataset.supprimer].code;
     b.rubriques = b.rubriques.filter(r => r.code !== code && r.parent !== code);
@@ -1443,7 +1462,7 @@ async function pageCanevas(donnees) {
   document.getElementById("enregistrer-canevas").onclick = async () => {
     const data = { reference: b.reference,
       rubriques: b.rubriques.map(r => ({ code: r.code, libelle: r.libelle, exigence: r.exigence, titre_requis: r.titre_requis, mots_min: r.mots_min,
-        intitules: r.intitules, parent: r.parent, ligne: r.ligne_choisie == null ? "auto" : r.ligne_choisie })),
+        intitules: r.intitules, parent: r.parent, apres: r.apres || null, ligne: r.ligne_choisie == null ? "auto" : r.ligne_choisie })),
       tableaux: b.tableaux.map(t => ({ code: t.code, libelle: t.libelle, exigence: t.exigence, ligne: t.ligne_choisie == null ? "auto" : t.ligne_choisie })) };
     try { const r = await post("/api/canevas", data); etat.brouillonCanevas = null; await pageCanevas(r); toast("Canevas enregistré : il s'applique aux prochaines analyses."); }
     catch (err) { toast(err.message, "erreur"); }
@@ -1454,6 +1473,73 @@ async function pageCanevas(donnees) {
     catch (err) { toast(err.message, "erreur"); }
   };
   brancherOngletsParam();
+}
+
+/* Propositions tirées d'un document de canevas : à cocher, puis appliquées au canevas en cours de modification. */
+function propositionsCanevasHtml(p) {
+  if (!p) return "";
+  const exLib = { obligatoire: "obligatoire", cas_echeant: "le cas échéant", annuel: "rapport annuel seulement", non_exigee: "non exigée" };
+  const caseHtml = (groupe, i, coche) => `<input type="checkbox" data-prop="${groupe}" data-i="${i}" ${coche ? "checked" : ""}>`;
+  const li = (contenu) => `<label class="prop">${contenu}</label>`;
+  const blocs = [];
+  if (p.reference && p.reference !== p.reference_actuelle)
+    blocs.push(`<h3>Référence du canevas</h3>${li(`${caseHtml("reference", 0, true)} Remplacer « ${esc(p.reference_actuelle)} » par <b>« ${esc(p.reference)} »</b>`)}`);
+  if (p.nouvelles.length)
+    blocs.push(`<h3>Rubriques nouvelles (${p.nouvelles.length})</h3>` + p.nouvelles.map((n, i) => li(`${caseHtml("nouvelles", i, true)}
+      <span><b>${esc(n.libelle)}</b> <span class="sous-ligne">${n.niveau === 1 ? `nouvelle partie${n.apres_libelle ? `, après « ${esc(n.apres_libelle)} »` : ""}` : `dans la partie « ${esc(n.parent_libelle || "")} »`} · ${exLib[n.exigence]}</span></span>`)).join(""));
+  const renommables = p.retrouvees.map((r, i) => ({ ...r, i })).filter(r => r.libelle_different);
+  if (renommables.length)
+    blocs.push(`<h3>Libellés différents (${renommables.length})</h3><p class="aide" style="margin:0 0 4px">Rubriques reconnues dont le document emploie un autre libellé : cochez pour adopter celui du document.</p>`
+      + renommables.map(r => li(`${caseHtml("renommer", r.i, false)} <span>${esc(r.libelle)} → <b>${esc(r.texte)}</b></span>`)).join(""));
+  if (p.absentes.length)
+    blocs.push(`<h3>Rubriques du canevas en vigueur absentes du document (${p.absentes.length})</h3><p class="aide" style="margin:0 0 4px">Cochez celles qui ne doivent plus être exigées (elles resteront dans la liste, en « non exigée »).</p>`
+      + p.absentes.map((a, i) => li(`${caseHtml("absentes", i, false)} <span>${esc(a.libelle)}${a.parent_libelle ? ` <span class="sous-ligne">(${esc(a.parent_libelle)})</span>` : ""}</span>`)).join(""));
+  const tabChanges = p.tableaux.map((t, i) => ({ ...t, i })).filter(t => t.code && t.different);
+  const tabNouveaux = p.tableaux.filter(t => !t.code);
+  if (tabChanges.length || p.tableaux_absents.length || tabNouveaux.length)
+    blocs.push(`<h3>Tableaux</h3>`
+      + tabChanges.map(t => li(`${caseHtml("tableaux", t.i, true)} <span>Tableau ${t.numero} : ${esc(t.libelle_actuel)} → <b>${esc(t.libelle)}</b></span>`)).join("")
+      + p.tableaux_absents.map((t, i) => li(`${caseHtml("tableaux_absents", i, false)} <span>Ne plus exiger le tableau ${t.numero} (${esc(t.libelle)}), absent du document</span>`)).join("")
+      + (tabNouveaux.length ? `<p class="aide" style="margin:6px 0 0">${tabNouveaux.map(t => `Tableau ${t.numero} : ${esc(t.libelle)}`).join(" ; ")} : ${tabNouveaux.length > 1 ? "ces tableaux ne sont pas" : "ce tableau n'est pas"} contrôlé${tabNouveaux.length > 1 ? "s" : ""} automatiquement ; vous pouvez ajouter une rubrique pour ${tabNouveaux.length > 1 ? "les" : "le"} suivre.</p>` : ""));
+  const resume = `${pluriel(p.elements, "élément")} du plan lu${p.elements > 1 ? "s" : ""}${p.ocr ? " (document scanné)" : ""} : ${pluriel(p.retrouvees.length, "rubrique")} reconnue${p.retrouvees.length > 1 ? "s" : ""}, ${pluriel(p.nouvelles.length, "nouvelle")}, ${pluriel(p.absentes.length, "absente")}.`;
+  return `<div class="panneau section-param propositions" id="propositions-canevas" style="margin-top:16px"><h2>${icone("ampoule")}Propositions tirées de « ${esc(p.nom)} »</h2>
+    <p class="aide" style="margin:0 0 10px">${resume}${p.elements ? "" : " Aucun plan n'a été reconnu dans ce document : vérifiez qu'il s'agit bien du canevas (titres numérotés I., II., … ou éléments énumérés)."}</p>
+    ${blocs.join("") || '<p class="aide">Le document correspond au canevas en vigueur : aucune modification à proposer.</p>'}
+    <div style="display:flex;gap:8px;margin-top:14px">${blocs.length ? `<button class="bouton primaire" id="appliquer-propositions">${icone("coche")}Appliquer les propositions cochées</button>` : ""}<button class="bouton" id="ignorer-propositions">Fermer</button></div></div>`;
+}
+function brancherPropositions(b) {
+  const p = etat.propositionsCanevas;
+  if (!p) return;
+  document.getElementById("ignorer-propositions").onclick = () => { etat.propositionsCanevas = null; b.garder = true; pageCanevas(b); };
+  const appliquer = document.getElementById("appliquer-propositions");
+  if (!appliquer) return;
+  appliquer.onclick = () => {
+    const coches = g => [...document.querySelectorAll(`[data-prop="${g}"]:checked`)].map(x => +x.dataset.i);
+    let n = 0;
+    if (coches("reference").length) { b.reference = p.reference; n++; }
+    const retenues = new Set();
+    coches("nouvelles").forEach(i => {
+      const x = p.nouvelles[i];
+      if (x.parent && x.parent.startsWith("nouveau_doc_") && !retenues.has(x.parent)) return;  // partie non retenue
+      if (b.rubriques.some(r => r.code === x.cle)) return;
+      const ref = x.parent || x.apres;
+      let pos = ref ? Math.max(...b.rubriques.map((r, k) => (r.code === ref || r.parent === ref) ? k : -1)) + 1 : -1;
+      if (pos <= 0) pos = b.rubriques.findIndex(r => r.code === "conclusion");
+      if (pos < 0) pos = b.rubriques.length;
+      b.rubriques.splice(pos, 0, { code: x.cle, libelle: x.libelle, niveau: x.niveau, parent: x.parent, apres: x.apres, exigence: x.exigence,
+        titre_requis: true, mots_min: 10, intitules: [], perso: true, ligne: null, ligne_choisie: null });
+      retenues.add(x.cle);
+      n++;
+    });
+    coches("renommer").forEach(i => { const r = b.rubriques.find(x => x.code === p.retrouvees[i].code); if (r) { r.libelle = p.retrouvees[i].texte; n++; } });
+    coches("absentes").forEach(i => { const r = b.rubriques.find(x => x.code === p.absentes[i].code); if (r) { r.exigence = "non_exigee"; n++; } });
+    coches("tableaux").forEach(i => { const t = b.tableaux.find(x => x.code === p.tableaux[i].code); if (t) { t.libelle = p.tableaux[i].libelle; n++; } });
+    coches("tableaux_absents").forEach(i => { const t = b.tableaux.find(x => x.code === p.tableaux_absents[i].code); if (t) { t.exigence = "non_exigee"; n++; } });
+    etat.propositionsCanevas = null;
+    b.garder = true;
+    pageCanevas(b);
+    toast(`${pluriel(n, "modification")} appliquée${n > 1 ? "s" : ""} : vérifiez le tableau puis cliquez sur « Enregistrer le canevas ».`);
+  };
 }
 
 /* ------------------------------------------------------------------ Paramètres : modèle du fichier d'analyse */
@@ -1512,7 +1598,7 @@ function pageAide() {
       <p><b>D'où viennent les montants du tableau de bord ?</b><br>De la situation d'exécution (SIGOBE) lorsqu'elle est fournie, sinon des tableaux du rapport. La source est indiquée sous le détail par EPN.</p>
       <p><b>Quelles sont les dates limites de transmission ?</b><br>${esc(resumeDelais())} Un rapport reçu après sa date limite est signalé « hors délai » (alerte, appréciation générale, fichier d'analyse). Ces dates se modifient dans les Paramètres.</p>
       <p><b>Comment est fixé le statut d'exécution ?</b><br>Le taux d'exécution est comparé au taux attendu en fin de période (25 %, 50 %, 75 %, 100 %). Les seuils se règlent dans les Paramètres.</p>
-      <p><b>Le canevas ou la grille d'analyse de la DCB a changé.</b><br>Dans Paramètres, onglet « Canevas des rapports », adaptez les rubriques (libellé, exigence, intitulés) ou ajoutez-en ; onglet « Modèle du fichier d'analyse », exportez le modèle, modifiez-le dans Excel puis importez-le.</p>
+      <p><b>Le canevas ou la grille d'analyse de la DCB a changé.</b><br>Dans Paramètres, onglet « Canevas des rapports », déposez la nouvelle note de la DCB dans « Actualiser à partir d'un nouveau canevas » et retenez les mises à jour proposées, ou adaptez vous-même les rubriques (libellé, exigence, intitulés) ; onglet « Modèle du fichier d'analyse », exportez le modèle, modifiez-le dans Excel puis importez-le.</p>
       <p><b>Un document scanné n'est pas lu.</b><br>Vérifiez dans Paramètres que la lecture des documents scannés est disponible. À défaut, demandez la version Word du rapport.</p>
       <p><b>Où sont conservées les données ?</b><br>Uniquement sur ce poste : les fichiers d'analyse dans le dossier des résultats, l'historique dans le profil de l'utilisateur. Aucune donnée n'est envoyée sur Internet.</p>
       <p><b>L'interface ne s'affiche pas.</b><br>Si Microsoft Edge ne l'affiche pas, l'application l'ouvre d'elle-même dans le navigateur par défaut au bout de 45 secondes. Vous pouvez aussi utiliser le raccourci « Analyse des rapports des CB (dans le navigateur) » du menu Démarrer. Le déroulement est consigné dans le journal (Paramètres, Fichiers).</p></div></div>`;
