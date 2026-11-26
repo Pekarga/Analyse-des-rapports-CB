@@ -28,9 +28,10 @@ from .analyse import PARAMETRES_DEFAUT, REFERENTIEL_DEFAUT
 from .controles import DEFAUT_DELAIS, jour_mois, lire_date
 from .ressources import dossier_local, dossier_ressources, dossier_utilisateur
 
-EXT_ACCEPTEES = {"rapport": (".docx", ".pdf"), "decret": (".pdf", ".docx", ".txt"),
+EXT_ACCEPTEES = {"rapport": (".docx", ".doc", ".pdf"), "decret": (".pdf", ".docx", ".doc", ".txt"),
                  "situation": (".xlsx", ".xlsm", ".csv", ".pdf", ".docx"), "logo": (".png", ".jpg", ".jpeg", ".gif", ".svg"),
-                 "modele": (".xlsx",), "canevas": (".docx", ".pdf")}
+                 "modele": (".xlsx", ".docx", ".doc"), "canevas": (".docx", ".doc", ".pdf")}
+FORMATS_FICHIER = {"word_excel": "Word et Excel", "word": "Word", "excel": "Excel"}
 INSTITUTION_DEFAUT = {"ligne1": "Ministère des Finances et du Budget", "ligne2": "Côte d'Ivoire"}
 JOURNAL = logging.getLogger("analyse_cb.serveur")
 
@@ -194,7 +195,7 @@ class Application:
             "sortie": prefs.get("sortie") or str(dossier_sortie_defaut()),
             "delais": delais_effectifs(eff), "appreciation": eff.get("appreciation", {}),
             "execution": {"seuil_vigilance": 10, "seuil_sous_execution": 20, **eff.get("execution", {})},
-            "analyse": {"validation_directe": True, **eff.get("analyse", {})},
+            "analyse": {"validation_directe": True, "format_fichier": "word_excel", **eff.get("analyse", {})},
             "fichiers": {"parametres": str(PARAMETRES_DEFAUT), "referentiel": str(REFERENTIEL_DEFAUT),
                          "historique": str(historique.chemin_base()),
                          "journal": str(dossier_utilisateur() / "journal.txt")},
@@ -212,7 +213,7 @@ class Application:
                                 ("appreciation", ("tres_bien", "bien", "passable", "retour_cb_si_score_forme_inferieur_a",
                                                   "retour_cb_si_anomalies_majeures")),
                                 ("execution", ("seuil_vigilance", "seuil_sous_execution")),
-                                ("analyse", ("validation_directe",))):
+                                ("analyse", ("validation_directe", "format_fichier"))):
             for champ in champs:
                 v = (data.get(section) or {}).get(champ)
                 if v is None or v == "":
@@ -222,6 +223,9 @@ class Application:
                     v = f"{jj:02d}/{mm:02d}"
                 elif champ == "validation_directe":
                     v = bool(v)
+                elif champ == "format_fichier":
+                    if v not in FORMATS_FICHIER:
+                        raise ValueError("Format de fichier d'analyse inconnu.")
                 else:
                     v = float(str(v).replace(",", "."))
                     v = int(v) if v.is_integer() else v
@@ -248,13 +252,23 @@ class Application:
         if chemin == "/api/modele/importer":
             f = self.fichiers.get(str(data.get("id") or ""))
             if not f or f["categorie"] != "modele":
-                raise ValueError("Déposez d'abord le classeur Excel du modèle.")
+                raise ValueError("Déposez d'abord le modèle (classeur Excel ou document Word).")
+            if Path(f["nom"]).suffix.lower() in (".docx", ".doc"):
+                modele.importer_word(f["chemin"], f["nom"])
+                return canevas.description()
             return canevas.importer_modele(f["chemin"], f["nom"])
         if chemin == "/api/modele/reinitialiser":
+            if data.get("format") == "word":
+                modele.reinitialiser_word()
+                return canevas.description()
             return canevas.reinitialiser_modele()
         if chemin == "/api/modele/exporter":
             dossier = Path(lire_preferences().get("sortie") or dossier_sortie_defaut()) / "Modèles"
-            cible = modele.exporter(dossier)
+            if data.get("format") == "word":
+                prefs = lire_preferences()
+                cible = modele.exporter_word(dossier, {**INSTITUTION_DEFAUT, **prefs.get("institution", {})}, self.logo())
+            else:
+                cible = modele.exporter(dossier)
             if data.get("ouvrir", True):
                 ouvrir_systeme(cible)
             return {"chemin": str(cible)}
@@ -323,15 +337,28 @@ class Application:
                 dossier_epn = sortie / historique.nom_dossier_epn(res)
                 dossier = dossier_epn / pcle
                 dossier.mkdir(parents=True, exist_ok=True)
-                sortie_xlsx = remplir_modele(res, dossier / f"Analyse_{fichier['chemin'].stem}.xlsx")
+                # Fichier d'analyse : Excel (grille de la DCB et onglets de détail) et/ou Word (document de restitution)
+                fmt = (parametres.get("analyse") or {}).get("format_fichier") or "word_excel"
+                sortie_xlsx = remplir_modele(res, dossier / f"Analyse_{fichier['chemin'].stem}.xlsx") if fmt != "word" else None
+                sortie_docx = None
+                if fmt in ("word", "word_excel"):
+                    from . import modele
+                    from .word import rediger_word
+                    prefs = lire_preferences()
+                    sortie_docx = rediger_word(res, dossier / f"Analyse_{fichier['chemin'].stem}.docx",
+                                               modele.modele_word_courant(),
+                                               {**INSTITUTION_DEFAUT, **prefs.get("institution", {})}, self.logo())
+                principal = sortie_xlsx or sortie_docx
                 copie = dossier / fichier["nom"]
                 try:
                     shutil.copy2(fichier["chemin"], copie)
                 except OSError:
                     copie = None
-                ident = historique.enregistrer(res, sortie_xlsx, extra={
-                    "copie_rapport": str(copie) if copie else "", "dossier_epn": str(dossier_epn)})
-                resultats.append((res, sortie_xlsx))
+                ident = historique.enregistrer(res, principal, extra={
+                    "copie_rapport": str(copie) if copie else "", "dossier_epn": str(dossier_epn),
+                    "fichier_word": str(sortie_docx) if sortie_docx else "",
+                    "fichier_excel": str(sortie_xlsx) if sortie_xlsx else ""})
+                resultats.append((res, principal))
                 t["resultats"].append({
                     "id": ident, "epn": res.infos.epn, "periode": res.periode.libelle,
                     "epn_cle": historique.cle_epn_res(res), "periode_cle": pcle, "dossier": str(dossier),
@@ -339,11 +366,12 @@ class Application:
                     "date_limite": res.date_limite.isoformat(), "ecart_jours": res.ecart_jours,
                     "date_reception": res.infos.date_reception.isoformat() if res.infos.date_reception else None,
                     "delai": res.appreciation_delai,
-                    "retour": "retourné" in suite_a_donner(res), "fichier": str(sortie_xlsx),
+                    "retour": "retourné" in suite_a_donner(res), "fichier": str(principal),
+                    "word": str(sortie_docx) if sortie_docx else "", "excel": str(sortie_xlsx) if sortie_xlsx else "",
                     "avertissements": list(res.doc.avertissements)})
                 t["rapports"][k]["etat"] = "ok"
             except PermissionError:
-                t["rapports"][k].update(etat="erreur", erreur="Le fichier d'analyse est ouvert dans Excel : fermez-le puis relancez.")
+                t["rapports"][k].update(etat="erreur", erreur="Le fichier d'analyse est ouvert dans Excel ou Word : fermez-le puis relancez.")
             except Exception as exc:
                 traceback.print_exc()
                 JOURNAL.exception("Analyse de %s", fichier["nom"])
@@ -369,6 +397,13 @@ class Application:
             if not chemin.exists():
                 raise ValueError(f"Le fichier d'analyse n'existe plus : {chemin}")
             ouvrir_systeme(chemin if quoi == "fichier" else chemin.parent)
+        elif quoi == "word" and data.get("id"):
+            r = historique.obtenir(int(data["id"]))
+            chemin = Path((r or {}).get("donnees", {}).get("fichier_word") or "")
+            if not r or not chemin.name or not chemin.exists():
+                raise ValueError("Le fichier Word de cette analyse n'existe pas (analyse antérieure à la version 3.8, "
+                                 "format Excel seul, ou fichier déplacé).")
+            ouvrir_systeme(chemin)
         elif quoi == "rapport" and data.get("id"):
             r = historique.obtenir(int(data["id"]))
             copie = Path((r or {}).get("donnees", {}).get("copie_rapport") or "")
@@ -518,6 +553,8 @@ class Gestionnaire(BaseHTTPRequestHandler):
                     return self._erreur("Analyse introuvable.", 404)
                 r["periode"] = historique.libelle_periode(r["periode_cle"])
                 r["fichier_existe"] = Path(r["fichier_analyse"]).exists()
+                r["fichier_word_existe"] = bool(r["donnees"].get("fichier_word")) and Path(r["donnees"]["fichier_word"]).exists()
+                r["fichier_excel"] = Path(r["fichier_analyse"]).suffix.lower() == ".xlsx"
                 r["epn_cle"] = historique.epn_du(r)
                 r["rapport_conserve"] = bool(r["donnees"].get("copie_rapport")) and Path(r["donnees"]["copie_rapport"]).exists()
                 nat = r["donnees"].get("natures") or {}

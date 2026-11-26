@@ -444,6 +444,7 @@ def description() -> dict:
     fixes = {p.ancres.get(n) for n in ("forme_global", "sommaire", "tableaux", "signature")}
     zone = p.lignes_zone("forme_global", "appreciation_forme")
     from .canevas_document import document
+    from .word import CHAMPS
     return {
         "reference": _ETAT["reference"], "reference_defaut": REFERENCE_DEFAUT, "modifie": bool(lire_config()),
         "document": document(),
@@ -451,6 +452,7 @@ def description() -> dict:
         "exigences_tableaux": [{"code": c, "libelle": l} for c, l in EXIGENCES_TABLEAUX],
         "rubriques": rubriques, "tableaux": tableaux,
         "parties": [{"code": r.code, "libelle": r.libelle} for r in RUBRIQUES if r.niveau == 1],
+        "modele_word": {**modele.info_word(), "champs_disponibles": [{"code": c, "libelle": l} for c, l in CHAMPS]},
         "modele": {**modele.info(),
                    "lignes": [{"ligne": r, "libelle": re.sub(r"\s+", " ", t).strip()[:90]} for r, t in zone if r not in fixes],
                    "ancres": [{"nom": n, "designation": modele.DESIGNATION[n], "ligne": p.ancres.get(n)}

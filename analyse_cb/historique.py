@@ -325,7 +325,9 @@ def fiche_epn(cle: str) -> dict | None:
             "date_reception": r["date_reception"], "date_limite": r["date_limite"], "ecart_jours": r["ecart_jours"],
             "score_forme": r["score_forme"], "score_fond": r["score_fond"], "anomalies_majeures": r["anomalies_majeures"],
             "retour": bool(r["retour"]), "date_analyse": r["date_analyse"], "source": (dn.get("montants") or {}).get("source", ""),
-            "fichier_existe": Path(r["fichier_analyse"]).exists(), "rapport_conserve": bool(copie) and Path(copie).exists()})
+            "fichier_existe": Path(r["fichier_analyse"]).exists(), "rapport_conserve": bool(copie) and Path(copie).exists(),
+            "fichier_excel": Path(r["fichier_analyse"]).suffix.lower() == ".xlsx",
+            "word_existe": bool(dn.get("fichier_word")) and Path(dn["fichier_word"]).exists()})
     dossier = next((r["donnees"].get("dossier_epn") for r in recs if r["donnees"].get("dossier_epn")), "")
     return {"cle": cle, "epn": d["epn"], "sigle": d["sigle"], "tutelle": d["tutelle"],
             "controleurs": sorted({r["controleur"] for r in recs if r["controleur"]}),

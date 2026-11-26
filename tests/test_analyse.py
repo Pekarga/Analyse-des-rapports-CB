@@ -821,6 +821,11 @@ def test_serveur_interface_et_api(rapports, references, tmp_path, monkeypatch):
         dossier = Path(res["dossier"])  # <sortie>/<EPN>/<période>/ : analyse et copie du rapport
         assert dossier.parent.parent == tmp_path / "sortie" and dossier.name == res["periode_cle"]
         assert Path(res["fichier"]).parent == dossier and (dossier / Path(rapports["conforme"]).name).exists()
+        # Fichier d'analyse au format Word (par défaut : Word et Excel), ouvrable depuis l'interface
+        assert res["fichier"].endswith(".xlsx") and res["excel"] == res["fichier"]
+        assert res["word"].endswith(".docx") and Path(res["word"]).parent == dossier and Path(res["word"]).exists()
+        assert appel("/api/ouvrir", {"quoi": "word", "id": res["id"]})["ok"]
+        assert appel(f"/api/rapport?id={res['id']}")["fichier_word_existe"]
         assert appel("/api/epns")["epns"][0]["cle"] == res["epn_cle"]
         fiche = appel("/api/epn?cle=" + quote(res["epn_cle"]))
         assert fiche["analyses"][0]["rapport_conserve"] and fiche["dossier_existe"]
@@ -1153,3 +1158,84 @@ def test_actualiser_canevas_depuis_document(tmp_path, monkeypatch):
         if canevas.chemin_config().exists():
             canevas.chemin_config().unlink()
         canevas.actualiser(force=True)
+
+
+def test_fichier_analyse_word(res_anomalies_ref, tmp_path, monkeypatch):
+    """Fichier d'analyse Word : structure et libellés du modèle de fichier d'analyse, statuts, textes rédigés."""
+    _profil_temporaire(monkeypatch, tmp_path)
+    from docx import Document
+    from analyse_cb.excel import suite_a_donner
+    from analyse_cb.word import rediger_word
+    res = res_anomalies_ref
+    f = rediger_word(res, tmp_path / "analyse.docx", institution={"ligne1": "Ministère des Finances et du Budget"})
+    d = Document(f)
+    textes = [p.text for p in d.paragraphs]
+    assert textes[0].startswith("CANEVAS D'ANALYSE DES RAPPORTS")  # titre du modèle Excel
+    for titre in ("I. DELAI DE TRANSMISSION", "II. ANALYSE DE LA FORME DU RAPPORT", "III. ANALYSE DU FOND DU RAPPORT",
+                  "Appréciation générale du fond du rapport", "Suite à donner"):
+        assert titre in textes, titre
+    assert suite_a_donner(res) in textes and not any("{{" in t for t in textes)
+    assert len(d.tables) == 6  # identification, délai, forme, fond, difficultés, suggestions
+    ident, delai, forme, fond = d.tables[:4]
+    assert ident.rows[0].cells[1].text == res.infos.epn and delai.rows[1].cells[4].text == res.appreciation_delai
+    lignes_forme = {r.cells[0].text: r.cells[1].text for r in forme.rows[1:]}
+    statuts = {l.code: l.statut for l in res.forme}
+    assert lignes_forme["Présence de toutes les parties et sous-parties obligatoires du rapport"] == statuts["global_forme"]
+    assert lignes_forme["Analyse des ratios de gestion"] == statuts["ratios"]
+    lib_fond = [r.cells[0].text for r in fond.rows[1:]]
+    assert "COGES / Organes de supervision (Conseil de gestion)" in lib_fond and "Comité de trésorerie" in lib_fond
+    assert "Contrôle de trésorerie" not in lib_fond  # libellé erroné de la grille de la DCB corrigé
+    assert res.infos.epn in d.sections[0].footer.paragraphs[0].text
+    assert d.sections[0].header.paragraphs[0].text == "MINISTÈRE DES FINANCES ET DU BUDGET"
+
+
+def test_modele_word_personnalise(res_conforme_ref, tmp_path, monkeypatch):
+    """Modèle Word importé : champs {{…}} remplacés (corps, en-tête), grille insérée à l'emplacement de {{ANALYSE}}."""
+    _profil_temporaire(monkeypatch, tmp_path)
+    from docx import Document
+    from analyse_cb import modele
+    from analyse_cb.word import rediger_word
+    m = Document()
+    m.sections[0].header.paragraphs[0].text = "Direction du Contrôle Budgétaire – {{EPN}}"
+    m.add_paragraph("FICHE D'ANALYSE – {{EPN}} ({{PERIODE}})")
+    m.add_paragraph("{{ANALYSE}}")
+    m.add_paragraph("Fait le {{DATE_ANALYSE}} – Le Chargé d'Études")
+    m.save(tmp_path / "Mon modèle.docx")
+    info = modele.importer_word(tmp_path / "Mon modèle.docx", "Mon modèle.docx")
+    assert info["personnalise"] and info["repere_analyse"] and {"EPN", "PERIODE", "ANALYSE"} <= set(info["champs"])
+    try:
+        f = rediger_word(res_conforme_ref, tmp_path / "analyse.docx", modele.modele_word_courant())
+        d = Document(f)
+        assert d.paragraphs[0].text == f"FICHE D'ANALYSE – {res_conforme_ref.infos.epn} ({res_conforme_ref.periode.libelle})"
+        assert d.sections[0].header.paragraphs[0].text.endswith(res_conforme_ref.infos.epn)
+        assert len(d.tables) == 5  # pas de tableau d'identification : le modèle affiche lui-même {{EPN}}
+        corps = list(d.element.body)
+        dernier_tableau = max(i for i, e in enumerate(corps) if e.tag.endswith("}tbl"))
+        signature = next(i for i, e in enumerate(corps) if "Fait le" in "".join(e.itertext()))
+        assert dernier_tableau < signature and not any("{{" in p.text for p in d.paragraphs)
+    finally:
+        modele.reinitialiser_word()
+    assert not modele.info_word()["personnalise"]
+
+
+@pytest.mark.skipif(not shutil.which("soffice"), reason="LibreOffice absent : conversion .doc non testable")
+def test_document_doc_converti(rapports, tmp_path, monkeypatch):
+    """Un rapport au format Word 97-2003 (.doc) est converti puis lu comme le .docx d'origine."""
+    _profil_temporaire(monkeypatch, tmp_path)
+    from analyse_cb.lecture import lire_rapport
+    subprocess.run(["soffice", "--headless", "--convert-to", "doc", "--outdir", str(tmp_path), str(rapports["conforme"])],
+                   capture_output=True, timeout=180)
+    doc_97 = tmp_path / (Path(rapports["conforme"]).stem + ".doc")
+    assert doc_97.exists()
+    lu = lire_rapport(doc_97)
+    assert lu.chemin == doc_97 and "INTRODUCTION" in lu.texte(avec_tableaux=False)
+
+
+def test_doc_sans_convertisseur(tmp_path, monkeypatch):
+    _profil_temporaire(monkeypatch, tmp_path)
+    from analyse_cb import bureautique
+    monkeypatch.setattr(bureautique, "_par_word", lambda s, c: False)
+    monkeypatch.setattr(bureautique, "_par_libreoffice", lambda s, c: False)
+    (tmp_path / "ancien.doc").write_bytes(b"\xd0\xcf\x11\xe0 document")
+    with pytest.raises(ValueError, match="Enregistrer sous"):
+        bureautique.doc_vers_docx(tmp_path / "ancien.doc")

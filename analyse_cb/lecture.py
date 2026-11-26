@@ -101,11 +101,12 @@ def lire_rapport(chemin: str | Path) -> DocumentRapport:
         doc = _lire_docx(chemin)
     elif ext == ".pdf":
         doc = _lire_pdf(chemin)
-    elif ext == ".doc":
-        raise ValueError(f"{chemin.name} : format .doc non pris en charge, enregistrez-le en .docx "
-                         "(ou convertissez-le avec LibreOffice : soffice --headless --convert-to docx).")
+    elif ext == ".doc":  # Word 97-2003 : converti en .docx (Word ou LibreOffice), puis lu
+        from .bureautique import doc_vers_docx
+        doc = _lire_docx(doc_vers_docx(chemin))
+        doc.chemin = chemin
     else:
-        raise ValueError(f"{chemin.name} : format non pris en charge ({ext}). Formats acceptés : .docx, .pdf")
+        raise ValueError(f"{chemin.name} : format non pris en charge ({ext}). Formats acceptés : .docx, .doc, .pdf")
     _marquer_sommaire(doc)
     _associer_legendes(doc)
     return doc

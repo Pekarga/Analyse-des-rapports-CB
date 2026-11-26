@@ -309,3 +309,72 @@ def exporter(dossier: Path) -> Path:
                        + ".xlsx")
     shutil.copy2(modele_courant(), cible)
     return cible
+
+
+# ------------------------------------------------------------------ modèle Word du fichier d'analyse
+NOM_WORD = "modele_fichier_analyse.docx"
+NOM_META_WORD = "modele_fichier_analyse_word.json"
+
+
+def chemin_word_personnalise() -> Path:
+    return dossier_utilisateur() / NOM_WORD
+
+
+def modele_word_courant() -> Path | None:
+    """Modèle Word importé (None : document produit par l'application, avec l'en-tête de l'institution)."""
+    p = chemin_word_personnalise()
+    return p if p.exists() else None
+
+
+def info_word() -> dict:
+    p = modele_word_courant()
+    try:
+        meta = json.loads((dossier_utilisateur() / NOM_META_WORD).read_text(encoding="utf-8")) if p else {}
+    except (OSError, ValueError):
+        meta = {}
+    champs = []
+    if p:
+        from .word import champs_du_modele
+        try:
+            champs = champs_du_modele(p)
+        except Exception:
+            champs = []
+    return {"personnalise": bool(p), "nom": meta.get("nom") if p else "Modèle Word par défaut (en-tête de l'institution)",
+            "importe_le": meta.get("importe_le"), "champs": champs, "repere_analyse": "ANALYSE" in champs}
+
+
+def importer_word(source: Path, nom: str) -> dict:
+    """Adopte un modèle Word (.docx, ou .doc converti) pour le fichier d'analyse au format Word."""
+    ext = Path(nom).suffix.lower()
+    if ext == ".doc":
+        from .bureautique import doc_vers_docx
+        source = doc_vers_docx(source)
+    elif ext != ".docx":
+        raise ValueError("Le modèle Word doit être un document .docx ou .doc.")
+    from .word import champs_du_modele
+    try:
+        champs_du_modele(Path(source))
+    except Exception:
+        raise ValueError("Le fichier n'a pas pu être lu comme document Word.") from None
+    shutil.copy2(source, chemin_word_personnalise())
+    (dossier_utilisateur() / NOM_META_WORD).write_text(json.dumps(
+        {"nom": Path(nom).name, "importe_le": datetime.now().isoformat(timespec="seconds")}, ensure_ascii=False),
+        encoding="utf-8")
+    return info_word()
+
+
+def reinitialiser_word() -> None:
+    for p in (chemin_word_personnalise(), dossier_utilisateur() / NOM_META_WORD):
+        if p.exists():
+            p.unlink()
+
+
+def exporter_word(dossier: Path, institution: dict | None = None, logo: Path | None = None) -> Path:
+    """Copie du modèle Word en vigueur, ou modèle de départ à personnaliser (en-tête, champs {{…}}, {{ANALYSE}})."""
+    dossier.mkdir(parents=True, exist_ok=True)
+    cible = dossier / "Modèle Word du fichier d'analyse.docx"
+    if modele_word_courant():
+        shutil.copy2(modele_word_courant(), cible)
+        return cible
+    from .word import modele_initial
+    return modele_initial(cible, institution, logo)

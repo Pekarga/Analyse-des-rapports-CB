@@ -1,6 +1,7 @@
 """Remplissage du fichier d'analyse Excel (modèle de la DCB) et production des onglets de détail."""
 from __future__ import annotations
 
+import os
 from datetime import date
 from pathlib import Path
 
@@ -655,7 +656,10 @@ def tableau_de_bord(resultats: list[tuple[ResultatAnalyse, Path]], sortie: str |
                        sum(1 for c in r.constats if c.gravite == "Mineure"), r.signature[0],
                        r.appreciation_decret, r.appreciation_situation, suite_a_donner(r), fichier.name])
         ws.cell(i, 4).number_format = ws.cell(i, 5).number_format = "DD/MM/YYYY"
-        ws.cell(i, 20).hyperlink = fichier.name
+        try:  # lien relatif vers le fichier d'analyse (rangé dans le dossier de son EPN)
+            ws.cell(i, 20).hyperlink = Path(os.path.relpath(fichier, Path(sortie).parent)).as_posix()
+        except ValueError:  # autre lecteur
+            ws.cell(i, 20).hyperlink = Path(fichier).resolve().as_uri()
         if r.confrontation:
             ws.cell(i, 17).fill = PatternFill("solid", fgColor=VERT if r.decret_conforme else ORANGE)
         if r.rapprochement:

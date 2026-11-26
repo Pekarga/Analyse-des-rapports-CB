@@ -17,7 +17,7 @@ from .controles import lire_csv
 from .excel import remplir_modele, tableau_de_bord
 from .texte import normaliser
 
-EXTENSIONS = {".docx", ".pdf"}
+EXTENSIONS = {".docx", ".doc", ".pdf"}
 
 
 def _registre(chemin: str | None) -> dict[str, dict]:
@@ -39,7 +39,7 @@ def _registre(chemin: str | None) -> dict[str, dict]:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m analyse_cb",
                                 description="Analyse automatique des rapports des Contrôleurs Budgétaires (canevas DCB 2023).")
-    p.add_argument("entrees", nargs="+", help="Rapport(s) .docx/.pdf ou dossier(s) les contenant")
+    p.add_argument("entrees", nargs="+", help="Rapport(s) .docx/.doc/.pdf ou dossier(s) les contenant")
     p.add_argument("--sortie", "-o", default="resultats", help="Dossier de sortie (défaut : resultats/)")
     p.add_argument("--registre", help="CSV de réception : fichier;epn;controleur;periode;date_reception;charge_etudes")
     p.add_argument("--reception", help="Date de réception par la DCB (jj/mm/aaaa) – rapport unique")
@@ -50,6 +50,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--parametres", help="Fichier de paramètres TOML (défaut : config/parametres.toml)")
     p.add_argument("--referentiel", help="Référentiel des EPN (défaut : config/referentiel_epn.csv)")
     p.add_argument("--modele", help="Modèle Excel d'analyse (défaut : modeles/Fichier_analyse_des_rapports_des_CB.xlsx)")
+    p.add_argument("--word", action="store_true", help="Produit aussi le fichier d'analyse au format Word (.docx)")
     p.add_argument("--decret", action="append", default=[],
                    help="Décret de création et d'organisation (.pdf/.docx/.txt) ou dossier de décrets ; répétable. "
                         "Chaque rapport est associé au décret de son EPN (dénomination ou sigle).")
@@ -104,6 +105,9 @@ def main(argv: list[str] | None = None) -> int:
                            situations=charger_situations(r["situation"]) if r.get("situation") else situations,
                            reference_unique=unique or bool(r.get("decret") or r.get("situation")))
             fichier_sortie = remplir_modele(res, sortie / f"Analyse_{f.stem}.xlsx", a.modele)
+            if a.word:
+                from .word import rediger_word
+                print(f"   Word : {rediger_word(res, sortie / f'Analyse_{f.stem}.docx')}")
         except Exception as exc:  # un rapport illisible ne doit pas bloquer le lot
             erreurs += 1
             print(f"✗ {f.name} : {exc}", file=sys.stderr)

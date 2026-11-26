@@ -64,8 +64,9 @@ jobs:
       - name: Vérification de l'exécutable (analyse d'un rapport d'exemple)
         shell: pwsh
         run: |
-          $p = Start-Process -FilePath "dist\AnalyseRapportsCB\AnalyseRapportsCB.exe" -ArgumentList @("--ligne-de-commande", "exemples\rapport_exemple_conforme.docx", "--decret", "exemples\decret_creation_ANEX.pdf", "--situation", "exemples\situation_execution_30062099.xlsx", "-o", "verification") -Wait -PassThru
+          $p = Start-Process -FilePath "dist\AnalyseRapportsCB\AnalyseRapportsCB.exe" -ArgumentList @("--ligne-de-commande", "exemples\rapport_exemple_conforme.docx", "--decret", "exemples\decret_creation_ANEX.pdf", "--situation", "exemples\situation_execution_30062099.xlsx", "-o", "verification", "--word") -Wait -PassThru
           if (-not (Test-Path "verification\Analyse_rapport_exemple_conforme.xlsx")) { throw "Le fichier d'analyse n'a pas été produit (code $($p.ExitCode))." }
+          if (-not (Test-Path "verification\Analyse_rapport_exemple_conforme.docx")) { throw "Le fichier d'analyse Word n'a pas été produit (code $($p.ExitCode))." }
           Write-Host "Exécutable vérifié."
 
       - name: Vérification de l'interface (serveur local intégré à l'exécutable)

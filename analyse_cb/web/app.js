@@ -510,7 +510,7 @@ async function ficheEpn(cle) {
         <div class="sous-ligne">${a.date_reception ? `reçu le ${dateFr(a.date_reception)} · ` : ""}${a.date_limite ? `limite ${dateFr(a.date_limite)}` : ""}</div></td>
       <td>${pct(a.score_forme)}</td><td>${pct(a.score_fond)}</td><td class="centre">${a.anomalies_majeures}</td>
       <td class="centre">${statutHtml(a.retour ? "Retour au CB" : "Exploitable", a.retour ? "rouge" : "vert")}</td>
-      <td class="centre"><div class="actions-ligne"><button class="bouton petit" data-voir="${a.id}">Voir</button><button class="bouton petit" data-excel="${a.id}" ${a.fichier_existe ? "" : "disabled"} title="Ouvrir le fichier d'analyse">Excel</button><button class="bouton petit" data-rapport="${a.id}" ${a.rapport_conserve ? "" : "disabled"} title="${a.rapport_conserve ? "Ouvrir le rapport du CB" : "Rapport non conservé (analyse antérieure à la version 3.4)"}">Rapport</button></div></td></tr>`;
+      <td class="centre"><div class="actions-ligne"><button class="bouton petit" data-voir="${a.id}">Voir</button><button class="bouton petit" data-word="${a.id}" ${a.word_existe ? "" : "disabled"} title="${a.word_existe ? "Ouvrir le fichier d'analyse au format Word" : "Pas de fichier Word pour cette analyse (antérieure à la version 3.8 ou format Excel seul)"}">Word</button><button class="bouton petit" data-excel="${a.id}" ${a.fichier_existe && a.fichier_excel !== false ? "" : "disabled"} title="Ouvrir le fichier d'analyse au format Excel">Excel</button><button class="bouton petit" data-rapport="${a.id}" ${a.rapport_conserve ? "" : "disabled"} title="${a.rapport_conserve ? "Ouvrir le rapport du CB" : "Rapport non conservé (analyse antérieure à la version 3.4)"}">Rapport</button></div></td></tr>`;
   const exercices = f.annees.map(an => {
     const liste = f.analyses.filter(a => a.annee === an).sort((x, y) => x.rang - y.rang);
     return `<div class="panneau" style="margin-top:16px"><h2>${icone("calendrier")}Exercice ${an}<span class="droite">${friseHtml(liste.map(a => ({ ...a, retour: a.retour, forme: a.score_forme })), an)}</span></h2>
@@ -528,6 +528,7 @@ async function ficheEpn(cle) {
   document.getElementById("f-dossier").onclick = () => post("/api/ouvrir", { quoi: "dossier_epn", cle }).catch(err => toast(err.message, "erreur"));
   document.querySelectorAll("[data-voir]").forEach(b => b.onclick = () => ouvrirRapport(+b.dataset.voir));
   document.querySelectorAll("[data-excel]").forEach(b => b.onclick = () => post("/api/ouvrir", { quoi: "fichier", id: +b.dataset.excel }).catch(err => toast(err.message, "erreur")));
+  document.querySelectorAll("[data-word]").forEach(b => b.onclick = () => post("/api/ouvrir", { quoi: "word", id: +b.dataset.word }).catch(err => toast(err.message, "erreur")));
   document.querySelectorAll("[data-rapport]").forEach(b => b.onclick = () => post("/api/ouvrir", { quoi: "rapport", id: +b.dataset.rapport }).catch(err => toast(err.message, "erreur")));
   document.querySelectorAll(".puce-periode[data-id]").forEach(x => x.onclick = () => ouvrirRapport(+x.dataset.id));
 }
@@ -920,8 +921,8 @@ async function pageAnalyse() {
       </div>
       <div class="panneau" id="resultats" style="margin-top:16px" hidden></div>`;
 
-  brancherDepot("depot-rapports", "rapport", [".docx", ".pdf"], f => { A.rapports.push({ ...f, reception: "", periode: "", etat: "attente" }); pageAnalyse(); });
-  brancherDepot("depot-decrets", "decret", [".pdf", ".docx", ".txt"], f => { A.decrets.push(f); pageAnalyse(); });
+  brancherDepot("depot-rapports", "rapport", [".docx", ".doc", ".pdf"], f => { A.rapports.push({ ...f, reception: "", periode: "", etat: "attente" }); pageAnalyse(); });
+  brancherDepot("depot-decrets", "decret", [".pdf", ".docx", ".doc", ".txt"], f => { A.decrets.push(f); pageAnalyse(); });
   brancherDepot("depot-situations", "situation", [".xlsx", ".xlsm", ".csv", ".pdf", ".docx"], f => { A.situations.push(f); pageAnalyse(); });
   document.querySelectorAll("[data-champ]").forEach(el => el.onchange = () => {
     const i = +el.dataset.i;
@@ -1026,11 +1027,12 @@ function afficherResultats(t) {
         <div class="etiquettes"><span class="etiquette">Forme ${pct(r.forme)}</span><span class="etiquette">Fond ${pct(r.fond)}</span><span class="etiquette">${r.anomalies_majeures} anomalies majeures</span>
         ${statutHtml(r.retour ? "Retour au CB" : "Exploitable", r.retour ? "rouge" : "vert")}</div>
         ${(r.avertissements || []).map(a => `<div class="m" style="margin-top:4px">⚠ ${esc(a)}</div>`).join("")}</div>
-      <div class="b"><button class="bouton" data-detail="${r.id}">Voir l'analyse</button>${r.epn_cle ? `<button class="bouton" data-tdb="${esc(r.epn_cle)}">${icone("accueil")}Tableau de bord de l'EPN</button>` : ""}<button class="bouton primaire" data-excel="${r.id}">${icone("ouvrir")}Ouvrir l'Excel</button></div></div>`).join("")
+      <div class="b"><button class="bouton" data-detail="${r.id}">Voir l'analyse</button>${r.epn_cle ? `<button class="bouton" data-tdb="${esc(r.epn_cle)}">${icone("accueil")}Tableau de bord de l'EPN</button>` : ""}${r.word ? `<button class="bouton primaire" data-word="${r.id}">${icone("ouvrir")}Ouvrir le Word</button>` : ""}${r.excel ? `<button class="bouton ${r.word ? "" : "primaire"}" data-excel="${r.id}">${icone("ouvrir")}Ouvrir l'Excel</button>` : ""}</div></div>`).join("")
     + (t.tableau_de_bord ? `<div style="margin-top:10px"><button class="bouton" id="tdb-excel">${icone("tableau")}Tableau de bord consolidé (Excel)</button></div>` : "");
   zone.querySelectorAll("[data-detail]").forEach(b => b.onclick = () => ouvrirRapport(+b.dataset.detail));
   zone.querySelectorAll("[data-tdb]").forEach(b => b.onclick = () => allerEpn(b.dataset.tdb, "tableau"));
   zone.querySelectorAll("[data-excel]").forEach(b => b.onclick = () => post("/api/ouvrir", { quoi: "fichier", id: +b.dataset.excel }).catch(err => toast(err.message, "erreur")));
+  zone.querySelectorAll("[data-word]").forEach(b => b.onclick = () => post("/api/ouvrir", { quoi: "word", id: +b.dataset.word }).catch(err => toast(err.message, "erreur")));
   const tdb = document.getElementById("tdb-excel");
   if (tdb) tdb.onclick = () => post("/api/ouvrir", { quoi: "chemin", chemin: t.tableau_de_bord }).catch(err => toast(err.message, "erreur"));
 }
@@ -1349,7 +1351,8 @@ async function ouvrirRapport(id) {
       <span class="etiquette">Fond ${pct(r.score_fond)}</span><span class="etiquette">${r.anomalies_majeures} anomalies majeures</span>${D.delai ? `<span class="etiquette">${esc(D.delai)}</span>` : ""}
       ${statutHtml(r.retour ? "Retour au CB" : "Exploitable", r.retour ? "rouge" : "vert")}</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
-      <button class="bouton primaire" id="t-excel" ${r.fichier_existe ? "" : "disabled"}>${icone("ouvrir")}Ouvrir le fichier d'analyse</button>
+      ${r.fichier_word_existe ? `<button class="bouton primaire" id="t-word">${icone("ouvrir")}Ouvrir le Word</button>` : ""}
+      <button class="bouton ${r.fichier_word_existe ? "" : "primaire"}" id="t-excel" ${r.fichier_existe ? "" : "disabled"}>${icone("ouvrir")}${r.fichier_excel === false ? "Ouvrir le fichier d'analyse" : r.fichier_word_existe ? "Ouvrir l'Excel" : "Ouvrir le fichier d'analyse"}</button>
       <button class="bouton" id="t-dossier" ${r.fichier_existe ? "" : "disabled"}>${icone("dossier")}Dossier</button>
       <button class="bouton" id="t-epn">${icone("accueil")}Fiche de l'EPN</button>
       <button class="bouton danger" id="t-supprimer">${icone("corbeille")}Retirer de l'historique</button></div>
@@ -1384,6 +1387,8 @@ async function ouvrirRapport(id) {
   t.scrollTop = 0;
   t.querySelector(".fermer").onclick = fermerTiroir;
   document.getElementById("t-excel").onclick = () => post("/api/ouvrir", { quoi: "fichier", id }).catch(err => toast(err.message, "erreur"));
+  const tWord = document.getElementById("t-word");
+  if (tWord) tWord.onclick = () => post("/api/ouvrir", { quoi: "word", id }).catch(err => toast(err.message, "erreur"));
   document.getElementById("t-dossier").onclick = () => post("/api/ouvrir", { quoi: "dossier", id }).catch(err => toast(err.message, "erreur"));
   const lienNatures = document.getElementById("t-natures");
   if (lienNatures) lienNatures.onclick = () => allerEpn(r.epn_cle, "natures", r.periode_cle);
@@ -1418,6 +1423,9 @@ async function pageParametres() {
         <div style="display:flex;gap:8px"><button class="bouton" id="choisir-logo">${icone("depot")}Choisir une image</button><button class="bouton" id="retirer-logo">Retirer</button></div><div id="depot-logo" hidden></div></div></div></div>
       <div class="panneau section-param"><h2>${icone("dossier")}Analyse</h2>
         <div class="champ"><label for="sortie-param">Dossier des résultats</label><input id="sortie-param" value="${esc(p.sortie)}"></div>
+        <div class="champ" style="margin-top:12px"><label for="format-fichier">Fichier d'analyse produit pour chaque rapport</label>
+          <select id="format-fichier">${[["word_excel", "Word et Excel"], ["word", "Word"], ["excel", "Excel"]].map(([v, l]) => `<option value="${v}" ${p.analyse.format_fichier === v ? "selected" : ""}>${l}</option>`).join("")}</select>
+          <span class="note">Le fichier Word reprend la grille du modèle de fichier d'analyse (onglet « Modèle du fichier d'analyse ») ; le fichier Excel comporte en plus les onglets de détail.</span></div>
         <label class="interrupteur" style="margin-top:12px"><input type="checkbox" id="validation" ${p.analyse.validation_directe ? "checked" : ""}> Produire les fichiers d'analyse sous forme définitive (statuts tranchés)</label></div>
     </div><div class="pile">
       <div class="panneau section-param"><h2>${icone("calendrier")}Délais de transmission</h2><div class="ligne-champs">
@@ -1442,7 +1450,8 @@ async function pageParametres() {
   document.getElementById("retirer-logo").onclick = async () => { await post("/api/supprimer_logo"); await majEnvironnement(); majLogo(); };
   document.querySelectorAll("[data-ouvrir]").forEach(b => b.onclick = () => post("/api/ouvrir", { quoi: b.dataset.ouvrir }).catch(err => toast(err.message, "erreur")));
   document.getElementById("enregistrer").onclick = async () => {
-    const data = { sortie: document.getElementById("sortie-param").value, analyse: { validation_directe: document.getElementById("validation").checked } };
+    const data = { sortie: document.getElementById("sortie-param").value,
+      analyse: { validation_directe: document.getElementById("validation").checked, format_fichier: document.getElementById("format-fichier").value } };
     document.querySelectorAll("[data-sec]").forEach(el => { (data[el.dataset.sec] = data[el.dataset.sec] || {})[el.dataset.cle] = el.value; });
     try { await post("/api/parametres", data); await majEnvironnement(); etat.analyse.charge = undefined; etat.analyse.sortie = undefined; toast("Paramètres enregistrés."); }
     catch (err) { toast(err.message, "erreur"); }
@@ -1487,7 +1496,7 @@ async function pageCanevas(donnees) {
       <span class="note">Cité dans l'appréciation de la forme : « … examiné au regard du canevas fixé par la ${esc(b.reference)} ». Par défaut : ${esc(cv.reference_defaut)}.</span></div>
       <div class="import-canevas">
         <div class="depot petit" id="depot-canevas" tabindex="0" role="button">${icone("depot")}<div class="titre">Actualiser à partir d'un nouveau canevas</div>
-          <div class="aide" style="margin:0">Déposez ici la note ou le canevas de la DCB (Word ou PDF, y compris scanné)</div></div>
+          <div class="aide" style="margin:0">Déposez ici la note ou le canevas de la DCB (Word .docx ou .doc, PDF, y compris scanné)</div></div>
         <div class="aide" style="margin:0">L'application lit le plan du document (parties, sous-parties, éléments énumérés, tableaux prescrits) et sa référence, le compare au canevas en vigueur et propose les mises à jour : vous choisissez celles à retenir, puis vous enregistrez.
           ${cv.document ? `<div style="margin-top:8px">Dernier canevas importé : <b>${esc(cv.document.nom)}</b> (le ${dateFr(cv.document.importe_le)}) – <a href="#" id="ouvrir-doc-canevas">ouvrir</a></div>` : ""}</div>
       </div>
@@ -1521,7 +1530,7 @@ async function pageCanevas(donnees) {
     t[ch === "ligne" ? "ligne_choisie" : ch] = lire(el, ch);
   });
   document.getElementById("reference-canevas").onchange = e => { b.reference = e.target.value; };
-  brancherDepot("depot-canevas", "canevas", [".docx", ".pdf"], async f => {
+  brancherDepot("depot-canevas", "canevas", [".docx", ".doc", ".pdf"], async f => {
     toast(`Lecture du canevas « ${f.nom} »…`);
     try {
       etat.propositionsCanevas = await post("/api/canevas/analyser", { id: f.id });
@@ -1641,41 +1650,52 @@ function brancherPropositions(b) {
 /* ------------------------------------------------------------------ Paramètres : modèle du fichier d'analyse */
 async function pageModele(donnees) {
   const cv = donnees || await api("/api/canevas");
-  const m = cv.modele;
-  const actions = `<button class="bouton" id="exporter-modele">${icone("export")}Exporter le modèle</button>`
-    + (m.personnalise ? `<button class="bouton danger" id="retablir-modele">${icone("actualiser")}Revenir au modèle de la DCB</button>` : "");
+  const m = cv.modele, w = cv.modele_word;
   const ancres = m.ancres.map(x => `<tr><td class="texte">${esc(x.designation)}</td><td class="centre">${x.ligne ? `ligne ${x.ligne}` : '<span class="nc">introuvable</span>'}</td></tr>`).join("");
-  contenu().innerHTML = entete("Paramètres", "Modèle du fichier d'analyse produit pour chaque rapport (document de restitution)", actions) + ongletsParamHtml("modele")
+  const pastille = perso => perso ? statutHtml("personnalisé", "bleu") : statutHtml("par défaut", "gris");
+  const importe = d => d ? `<p class="aide" style="margin:0 0 6px">Importé le ${dateFr(d)} à ${d.slice(11, 16)}.</p>` : "";
+  contenu().innerHTML = entete("Paramètres", "Modèles du fichier d'analyse produit pour chaque rapport (document de restitution)") + ongletsParamHtml("modele")
     + `<div class="grille-2-egal haut"><div class="pile">
-      <div class="panneau section-param"><h2>${icone("fichier")}Modèle en vigueur</h2>
-        <p style="margin:0 0 6px"><b>${esc(m.nom)}</b>${m.personnalise ? ` ${statutHtml("personnalisé", "bleu")}` : ` ${statutHtml("par défaut", "gris")}`}</p>
-        ${m.importe_le ? `<p class="aide" style="margin:0 0 6px">Importé le ${dateFr(m.importe_le)} à ${m.importe_le.slice(11, 16)}.</p>` : ""}
-        <p class="aide" style="margin:0">${m.manquantes.length ? `<span class="taux-ko">Lignes indispensables introuvables : ${esc(m.manquantes.join(" ; "))}. Le modèle de la DCB est utilisé à la place.</span>`
-          : "Toutes les lignes indispensables du modèle sont repérées."}
-          ${m.sans_ligne.length ? `<br>Sans ligne dans ce modèle (analysées et reportées dans l'onglet « Contrôle structure » du fichier) : ${esc(m.sans_ligne.join(" ; "))}.` : ""}</p></div>
-      <div class="panneau section-param"><h2>${icone("depot")}Remplacer le modèle</h2>
+      <div class="panneau section-param"><h2>${icone("tableau")}Modèle Excel (grille d'analyse)</h2>
+        <p style="margin:0 0 6px"><b>${esc(m.nom)}</b> ${pastille(m.personnalise)}</p>${importe(m.importe_le)}
+        <p class="aide" style="margin:0 0 10px">${m.manquantes.length ? `<span class="taux-ko">Lignes indispensables introuvables : ${esc(m.manquantes.join(" ; "))}. Le modèle de la DCB est utilisé à la place.</span>`
+          : "Toutes les lignes indispensables du modèle sont repérées. Ses libellés et l'ordre de ses lignes servent aussi au fichier Word."}
+          ${m.sans_ligne.length ? `<br>Sans ligne dans ce modèle (analysées et reportées dans l'onglet « Contrôle structure » du fichier Excel et dans le fichier Word) : ${esc(m.sans_ligne.join(" ; "))}.` : ""}</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="bouton" data-exporter="excel">${icone("export")}Exporter le modèle Excel</button>
+          ${m.personnalise ? `<button class="bouton danger" data-retablir="excel">${icone("actualiser")}Revenir au modèle de la DCB</button>` : ""}</div></div>
+      <div class="panneau section-param"><h2>${icone("fichier")}Modèle Word (fichier d'analyse au format Word)</h2>
+        <p style="margin:0 0 6px"><b>${esc(w.nom)}</b> ${pastille(w.personnalise)}</p>${importe(w.importe_le)}
+        <p class="aide" style="margin:0 0 10px">${w.personnalise
+          ? (w.champs.length ? `Champs trouvés dans le modèle : ${w.champs.map(c => `<code>{{${esc(c)}}}</code>`).join(" ")}. ` : "Aucun champ {{…}} dans ce modèle. ")
+            + (w.repere_analyse ? "La grille d'analyse est insérée à l'emplacement de <code>{{ANALYSE}}</code>." : "La grille d'analyse est ajoutée à la fin du document (placez <code>{{ANALYSE}}</code> pour choisir son emplacement).")
+          : "Le fichier Word porte l'en-tête de l'institution (Paramètres, onglet Général), le titre du modèle Excel, la grille d'analyse et un bloc de signature. Exportez-le pour le personnaliser."}</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="bouton" data-exporter="word">${icone("export")}Exporter le modèle Word</button>
+          ${w.personnalise ? `<button class="bouton danger" data-retablir="word">${icone("actualiser")}Revenir au modèle Word par défaut</button>` : ""}</div>
+        <details class="champs-word"><summary>Champs utilisables dans le modèle Word</summary>
+          <table class="donnees"><tbody>${w.champs_disponibles.map(c => `<tr><td class="texte"><code>{{${esc(c.code)}}}</code></td><td class="texte">${esc(c.libelle)}</td></tr>`).join("")}</tbody></table></details></div>
+      <div class="panneau section-param"><h2>${icone("depot")}Remplacer un modèle</h2>
         <ol class="etapes">
-          <li><b>Exportez le modèle</b> (bouton en haut de la page) : une copie s'ouvre dans Excel, rangée dans le dossier « Modèles » du dossier des résultats.</li>
-          <li><b>Modifiez-le dans Excel</b> : mise en forme, logo, en-tête, libellés, nouvelles lignes de rubriques dans les parties II et III (même libellé dans les deux parties). Gardez la grille dans la première feuille et les intitulés de la colonne A qui repèrent les parties (« II. ANALYSE DE LA FORME DU RAPPORT », « Présence de toutes les parties… », « Appréciation générale… », « Suite à donner »…).</li>
-          <li><b>Importez le modèle modifié</b> ci-dessous, puis vérifiez dans l'onglet « Canevas des rapports » la ligne retenue pour chaque rubrique.</li></ol>
-        <div class="depot petit" id="depot-modele" tabindex="0" role="button">${icone("depot")}<div class="titre">Importer un modèle (.xlsx)</div><div class="aide" style="margin:0">Cliquez ou déposez le classeur ici</div></div></div>
-    </div><div class="panneau section-param"><h2>${icone("tableau")}Lignes repérées dans le modèle</h2>
+          <li><b>Exportez le modèle</b> (Excel ou Word) : une copie s'ouvre, rangée dans le dossier « Modèles » du dossier des résultats.</li>
+          <li><b>Modifiez-le</b>. Excel : mise en forme, logo, libellés, nouvelles lignes de rubriques dans les parties II et III, en gardant la grille dans la première feuille et les intitulés de la colonne A qui repèrent les parties. Word : en-tête, logo, pied de page, styles, texte d'accompagnement, signature, avec les champs <code>{{EPN}}</code>, <code>{{PERIODE}}</code>… et <code>{{ANALYSE}}</code> là où la grille doit figurer.</li>
+          <li><b>Importez le modèle modifié</b> ci-dessous : un classeur .xlsx remplace le modèle Excel, un document .docx ou .doc le modèle Word.</li></ol>
+        <div class="depot petit" id="depot-modele" tabindex="0" role="button">${icone("depot")}<div class="titre">Importer un modèle (.xlsx, .docx ou .doc)</div><div class="aide" style="margin:0">Cliquez ou déposez le fichier ici</div></div></div>
+    </div><div class="panneau section-param"><h2>${icone("tableau")}Lignes repérées dans le modèle Excel</h2>
       <div class="defilant"><table class="donnees"><thead><tr><th>Élément du fichier d'analyse</th><th>Ligne</th></tr></thead><tbody>${ancres}</tbody></table></div>
       <p class="aide" style="margin:10px 0 0">Les lignes sont retrouvées d'après les intitulés de la colonne A : un modèle dont des lignes ont été ajoutées ou déplacées reste utilisable.</p></div></div>`;
-  brancherDepot("depot-modele", "modele", [".xlsx"], async f => {
+  brancherDepot("depot-modele", "modele", [".xlsx", ".docx", ".doc"], async f => {
     try { const r = await post("/api/modele/importer", { id: f.id }); await pageModele(r); toast(`Modèle « ${f.nom} » adopté : il s'applique aux prochaines analyses.`); }
     catch (err) { toast(err.message, "erreur"); }
   });
-  document.getElementById("exporter-modele").onclick = async () => {
-    try { const r = await post("/api/modele/exporter", {}); toast("Modèle exporté : " + r.chemin); }
+  document.querySelectorAll("[data-exporter]").forEach(b => b.onclick = async () => {
+    try { const r = await post("/api/modele/exporter", { format: b.dataset.exporter }); toast("Modèle exporté : " + r.chemin); }
     catch (err) { toast(err.message, "erreur"); }
-  };
-  const retablir = document.getElementById("retablir-modele");
-  if (retablir) retablir.onclick = async () => {
-    if (!confirm("Revenir au modèle de la DCB fourni avec l'application ?")) return;
-    try { const r = await post("/api/modele/reinitialiser"); await pageModele(r); toast("Modèle de la DCB rétabli."); }
+  });
+  document.querySelectorAll("[data-retablir]").forEach(b => b.onclick = async () => {
+    const word = b.dataset.retablir === "word";
+    if (!confirm(word ? "Revenir au modèle Word par défaut ?" : "Revenir au modèle de la DCB fourni avec l'application ?")) return;
+    try { const r = await post("/api/modele/reinitialiser", { format: b.dataset.retablir }); await pageModele(r); toast(word ? "Modèle Word par défaut rétabli." : "Modèle de la DCB rétabli."); }
     catch (err) { toast(err.message, "erreur"); }
-  };
+  });
   brancherOngletsParam();
 }
 
@@ -1685,7 +1705,7 @@ function pageAide() {
     + `<div class="grille-2-egal"><div class="panneau"><h2>${icone("lecture")}Analyser des rapports</h2><ol class="etapes">
       <li><b>Déposez les rapports</b> des Contrôleurs Budgétaires (Word ou PDF, y compris scannés) dans « Analyse des rapports », puis indiquez leur date de réception à la DCB.</li>
       <li><b>Ajoutez, si vous les avez, les décrets de création</b> des EPN et les <b>situations d'exécution</b> (états SIGOBE recettes et annexe des dépenses, Excel, CSV ou PDF).</li>
-      <li><b>Lancez l'analyse.</b> Chaque rapport donne un fichier Excel d'analyse (grille de la DCB rédigée) et alimente le tableau de bord.</li>
+      <li><b>Lancez l'analyse.</b> Chaque rapport donne son fichier d'analyse au format Word et Excel (grille de la DCB rédigée ; format choisi dans les Paramètres) et alimente le tableau de bord.</li>
       <li><b>Consultez</b> le tableau de bord, les alertes et le détail de chaque rapport ; ouvrez le fichier Excel pour le transmettre.</li></ol>
       <h2 style="margin-top:14px">${icone("dossier")}Suivre un EPN</h2>
       <p class="aide" style="margin:0 0 8px">Le choix <b>EPN</b>, en haut des pages, vaut pour le tableau de bord, la comparaison, les ratios, la nature économique et les alertes ; il est mémorisé sur ce poste. Après une analyse, l'application se place sur l'EPN analysé. « Ensemble des EPN » revient à la vue consolidée.</p>
