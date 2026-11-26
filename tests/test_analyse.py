@@ -843,6 +843,17 @@ def test_serveur_interface_et_api(rapports, references, tmp_path, monkeypatch):
         p = appel("/api/parametres", {"utilisateur": {"nom": "Test", "fonction": "Chargé d'Études"},
                                       "execution": {"seuil_vigilance": "5"}})
         assert p["execution"]["seuil_vigilance"] == 5 and appel("/api/etat")["utilisateur"]["nom"] == "Test"
+        # Paramètres : canevas des rapports et modèle du fichier d'analyse
+        from analyse_cb import modele
+        cv = appel("/api/canevas")
+        assert len(cv["rubriques"]) > 40 and len(cv["tableaux"]) == 8 and not cv["modele"]["personnalise"]
+        assert not cv["modele"]["manquantes"] and cv["modele"]["lignes"]
+        dep = appel("/api/televerser", brut=modele.MODELE_DCB.read_bytes(),
+                    entetes={"X-Nom-Fichier": quote("Modèle DCB.xlsx"), "X-Categorie": "modele"})
+        cv = appel("/api/modele/importer", {"id": dep["id"]})
+        assert cv["modele"]["personnalise"] and cv["modele"]["nom"] == "Modèle DCB.xlsx"
+        assert not appel("/api/modele/reinitialiser", {})["modele"]["personnalise"]
+        assert Path(appel("/api/modele/exporter", {"ouvrir": False})["chemin"]).exists()
         with pytest.raises(urllib.error.HTTPError) as e:
             appel("/api/parametres", {"delais": {"trimestre_2_date_limite": "31/02"}})
         assert e.value.code == 400
@@ -940,3 +951,113 @@ def test_redaction_commentaires_grille(res_anomalies_ref, tmp_path):
     long = " ".join(["Phrase numéro %d assez longue pour remplir une ligne entière du texte." % i for i in range(30)])
     blocs = aerer(long, 100, 3).split("\n\n")
     assert len(blocs) > 1 and all(len(b) <= 300 for b in blocs)
+
+
+def test_modele_dcb_lignes_reperees():
+    """Les lignes du modèle de la DCB, retrouvées d'après leurs libellés, sont celles de la grille d'origine."""
+    from analyse_cb import canevas, modele
+    plan = modele.calculer_plan(modele.MODELE_DCB, canevas.DEFAUT_RUBRIQUES, canevas.DEFAUT_TABLEAUX, canevas.alias_dcb())
+    assert plan.valide and not plan.manquantes
+    for r in canevas.DEFAUT_RUBRIQUES:
+        assert plan.forme.get(r.code) == r.ligne_forme, r.code
+        assert plan.fond.get(r.code) == r.ligne_fond, r.code
+    assert {t.code: plan.forme[t.code] for t in canevas.DEFAUT_TABLEAUX} == {t.code: t.ligne_forme for t in canevas.DEFAUT_TABLEAUX}
+    assert (plan.ancres["delai"], plan.ancres["suite"], plan.premiere_vide(plan.ancres["appreciation_forme"]),
+            plan.premiere_vide(plan.ancres["appreciation_fond"]), plan.premiere_vide(plan.ancres["appreciation_generale"])) == \
+        (13, 180, 78, 127, 166)
+    assert (plan.ancres["diff_execution"], plan.ancres["sugg_gestion"]) == (136, 155)
+
+
+def _inserer_ligne(ws, ligne: int, libelle: str) -> None:
+    """Insère une ligne dans la grille en décalant les cellules fusionnées (comme Excel)."""
+    fusions = list(ws.merged_cells.ranges)
+    for f in fusions:
+        ws.unmerge_cells(str(f))
+    ws.insert_rows(ligne)
+    for f in fusions:
+        if f.min_row >= ligne:
+            f.shift(0, 1)
+        ws.merge_cells(str(f))
+    ws.cell(ligne, 1, libelle)
+
+
+def test_canevas_et_modele_parametrables(rapports, references, tmp_path, monkeypatch):
+    """Canevas modifié dans les Paramètres (rubrique non exigée, rubriques ajoutées, référence) et modèle de fichier
+    d'analyse importé avec une ligne ajoutée pour « Analyse de la performance » dans les parties II et III."""
+    _profil_temporaire(monkeypatch, tmp_path)
+    from analyse_cb import canevas, modele
+    try:
+        # ---- modèle importé : ligne « Analyse de la performance » après les ratios (parties II et III)
+        wb = openpyxl.load_workbook(modele.MODELE_DCB)
+        ws = wb.worksheets[0]
+        _inserer_ligne(ws, 41, "Analyse de la performance")
+        _inserer_ligne(ws, 41 + 62, "Analyse de la performance")
+        source = tmp_path / "Nouveau modèle.xlsx"
+        wb.save(source)
+        d = canevas.importer_modele(source, source.name)
+        assert d["modele"]["personnalise"] and not d["modele"]["manquantes"]
+        perf = next(r for r in d["rubriques"] if r.get("code") == "performance")
+        assert (perf["ligne"], perf["ligne_fond"]) == (41, 103)
+        gf = next(r for r in d["rubriques"] if r["code"] == "gestion_financiere")
+        assert (gf["ligne"], gf["ligne_fond"]) == (43, 105)  # lignes suivantes décalées
+        assert next(a for a in d["modele"]["ancres"] if a["nom"] == "suite")["ligne"] == 182
+        # un classeur qui n'est pas une grille d'analyse est refusé
+        autre = openpyxl.Workbook()
+        autre.active["A1"] = "Sans rapport"
+        autre.save(tmp_path / "autre.xlsx")
+        with pytest.raises(ValueError, match="introuvables"):
+            canevas.importer_modele(tmp_path / "autre.xlsx", "autre.xlsx")
+
+        # ---- canevas : plan stratégique non exigé, rubriques ajoutées, référence du canevas
+        rubs = [{"code": r["code"], "libelle": r["libelle"], "exigence": r["exigence"], "titre_requis": r["titre_requis"],
+                 "mots_min": r["mots_min"], "intitules": r["intitules"], "ligne": "auto"} for r in d["rubriques"]]
+        next(r for r in rubs if r["code"] == "plan_strategique")["exigence"] = "non_exigee"
+        next(r for r in rubs if r["code"] == "ratios")["intitules"] = "Ratios de performance ; Indicateurs de gestion"
+        rubs.append({"code": "nouveau_1", "libelle": "Situation d'exécution du budget", "parent": "analyse_execution",
+                     "exigence": "obligatoire", "intitules": []})
+        rubs.append({"code": "nouveau_2", "libelle": "Analyse de la soutenabilité financière", "parent": None,
+                     "exigence": "obligatoire", "intitules": "Soutenabilité"})
+        d = canevas.enregistrer({"reference": "note n°0999/MBPE/DGBF/DCB du 1er janvier 2026", "rubriques": rubs,
+                                 "tableaux": [{"code": "T8", "exigence": "non_exigee", "libelle": "Motifs des rejets"}]})
+        ajoutees = [r for r in d["rubriques"] if r["perso"]]
+        assert [(r["code"], r["parent"], r["niveau"]) for r in ajoutees] == \
+            [("perso_1", "analyse_execution", 2), ("perso_2", None, 1)]
+        assert d["reference"].startswith("note n°0999") and d["modifie"]
+        assert next(t for t in d["tableaux"] if t["code"] == "T8")["exigence"] == "non_exigee"
+        assert "Analyse de la soutenabilité financière" in d["modele"]["sans_ligne"]
+
+        res = analyser(rapports["conforme"], InfosRapport(periode="2e trimestre 2099"), decrets=references["decret"],
+                       situations=references["situation"])
+        forme = {l.code: l for l in res.forme}
+        assert forme["plan_strategique"].statut == "Non applicable" and "non exigée" in forme["plan_strategique"].precision
+        # titre « II.1- Situation d'exécution du budget » trouvé (sans texte propre : ses sous-parties suivent)
+        assert "Situation d'exécution du budget" in forme["perso_1"].precision
+        assert forme["perso_2"].statut == "Non conforme"
+        assert "Analyse de la soutenabilité financière" in forme["global_forme"].precision  # obligatoire, même sans ligne
+        assert forme["T8"].statut == "Non applicable"
+        assert "0999" in appreciation_forme_texte(res)
+        sortie = remplir_modele(res, tmp_path / "analyse.xlsx")
+        ws = openpyxl.load_workbook(sortie).worksheets[0]
+        assert ws["C41"].value == forme["performance"].statut and ws["E41"].value
+        assert ws["C103"].value and ws["A43"].value.startswith("Analyse de la gestion financi")
+        assert ws["C23"].value == forme["introduction"].statut
+        assert next(t for t in d["tableaux"] if t["code"] == "T5")["ligne"] == 70  # tableau 5 : 69 → 70
+        assert ws["C70"].value == forme["T5"].statut and "recettes" in ws["A70"].value
+        assert "Suite" in ws["A182"].value and ws["A183"].value
+        assert ws.print_area == "'Feuil1'!$A$1:$E$186"
+
+        # ---- retour au canevas et au modèle par défaut
+        d = canevas.reinitialiser_modele()
+        d = canevas.reinitialiser()
+        assert not d["modifie"] and not d["modele"]["personnalise"] and not any(r["perso"] for r in d["rubriques"])
+        assert next(r for r in d["rubriques"] if r["code"] == "gestion_financiere")["ligne"] == 42
+    finally:
+        for f in (canevas.chemin_config(), modele.chemin_personnalise(), tmp_path / modele.NOM_META):
+            if f.exists():
+                f.unlink()
+        canevas.actualiser(force=True)
+
+
+def appreciation_forme_texte(res) -> str:
+    from analyse_cb.redaction import appreciation_forme
+    return appreciation_forme(res)

@@ -202,11 +202,14 @@ def commentaire_forme(l, res) -> str:
     if l.code in TABLEAU_PAR_CODE:
         return _forme_tableau(l, res)
     if l.code == "tableaux":
-        manquants = [f"n°{TABLEAU_PAR_CODE[c].numero}" for c in sorted(TABLEAU_PAR_CODE) if c not in res.tableaux.par_code]
+        exiges = [c for c in sorted(TABLEAU_PAR_CODE) if not TABLEAU_PAR_CODE[c].ignoree]
+        manquants = [f"n°{TABLEAU_PAR_CODE[c].numero}" for c in exiges if c not in res.tableaux.par_code]
         total = len(res.tableaux.tableaux)
         hors = sum(1 for t in res.tableaux.tableaux if not t.code or not t.principal)
         debut = (f"{pluriel(len(manquants), 'Le tableau', 'Les tableaux')} {enumerer(manquants)} "
-                 f"{pluriel(len(manquants), 'manque', 'manquent')}. ") if manquants else "Les huit tableaux du canevas sont présents. "
+                 f"{pluriel(len(manquants), 'manque', 'manquent')}. ") if manquants else (
+            "Les huit tableaux du canevas sont présents. " if len(exiges) == 8 else
+            f"Les {nombre(len(exiges))} tableaux exigés par le canevas sont présents. ")
         return debut + f"Le rapport compte {compte(total, 'tableau', 'tableaux')}" + (
             f", dont {nombre(hors)} hors canevas." if hors else ".")
     if l.code == "sommaire":
@@ -228,7 +231,8 @@ def commentaire_forme(l, res) -> str:
         return "Le rapport n'est ni daté ni signé."
     if l.code == "global_forme":
         manquantes = [RUBRIQUES_PHRASE.get(x.code, x.libelle.lower()) for x in res.forme
-                      if x.code in PAR_CODE and x.statut == NON_CONFORME and not PAR_CODE[x.code].hors_grille
+                      if x.code in PAR_CODE and x.statut == NON_CONFORME
+                      and (not PAR_CODE[x.code].hors_grille or PAR_CODE[x.code].perso)
                       and not PAR_CODE[x.code].cas_echeant and x.precision.startswith("Rubrique absente")]
         vides = [x.libelle for x in res.forme if x.code in PAR_CODE and "mais rubrique non renseignée" in x.precision]
         if not manquantes and not vides:

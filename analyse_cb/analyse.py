@@ -8,6 +8,8 @@ from datetime import date
 from pathlib import Path
 
 from .canevas import MARQUEURS_CANEVAS_2023, PAR_CODE, RUBRIQUES, TABLEAUX, enfants
+from .canevas import actualiser as actualiser_canevas
+from .canevas import plan as plan_modele
 from .controles import (ControlesTransverses, Element, Periode, controle_signature, date_limite,
                         detecter_periode, extraire_difficultes_suggestions, identifier_controleur,
                         identifier_epn, lire_date, charger_referentiel)
@@ -221,6 +223,7 @@ def analyser(chemin: str | Path, infos: InfosRapport | None = None, parametres: 
     """
     infos = infos or InfosRapport()
     parametres = parametres if parametres is not None else charger_parametres()
+    actualiser_canevas()  # canevas et modèle de fichier d'analyse paramétrés
     doc = lire_rapport(chemin)
     fiches = charger_referentiel(referentiel or REFERENTIEL_DEFAUT)
     nom_epn, fiche = identifier_epn(doc, fiches)
@@ -282,7 +285,7 @@ def analyser(chemin: str | Path, infos: InfosRapport | None = None, parametres: 
 # ------------------------------------------------------------------ canevas en vigueur
 def _evaluer_canevas(res: ResultatAnalyse) -> None:
     s = res.structure
-    marqueurs = [PAR_CODE[c].libelle for c in MARQUEURS_CANEVAS_2023 if s[c].trouvee]
+    marqueurs = [PAR_CODE[c].libelle for c in MARQUEURS_CANEVAS_2023 if c in PAR_CODE and s[c].trouvee]
     texte = res.doc.texte(avec_tableaux=True)
     budget_programme = bool(re.search(r"\b\d{11}\b", texte)) or bool(re.search(r"activit[ée]s?", texte, re.I))
     points = len(marqueurs) + (1 if budget_programme else 0)
@@ -307,6 +310,12 @@ def _evaluer_forme(res: ResultatAnalyse) -> None:
             precision = "Annexes jointes au rapport." if det.trouvee else "Pas d'annexes."
             lignes.append(LigneForme(rub.code, rub.libelle, None, statut, precision, True))
             continue
+        if rub.ignoree:
+            statut = NON_APPLICABLE
+            precision = ("Rubrique non exigée par le canevas paramétré"
+                         + (" (présente dans le rapport)." if det.trouvee else "."))
+            lignes.append(LigneForme(rub.code, rub.libelle, rub.ligne_forme, statut, precision, rub.hors_grille))
+            continue
         if rub.annuel_seulement and not annuel and not det.trouvee:
             statut, precision = NON_APPLICABLE, "Rubrique exigée uniquement dans le rapport annuel."
         elif det.mode == "titre" and det.nb_mots == 0 and not rub.cas_echeant:
@@ -327,10 +336,10 @@ def _evaluer_forme(res: ResultatAnalyse) -> None:
             statut, precision = A_VERIFIER, "Non mentionné : à renseigner le cas échéant (vérifier si l'EPN est concerné)."
         else:
             statut, precision = NON_CONFORME, "Rubrique absente du rapport."
-        manquantes = [e.libelle for e in enfants(rub.code)
-                      if not s[e.code].trouvee and not e.cas_echeant and not (e.annuel_seulement and not annuel)]
-        vides = [e.libelle for e in enfants(rub.code)
-                 if s[e.code].mode == "titre" and s[e.code].nb_mots == 0 and not e.cas_echeant]
+        manquantes = [e.libelle for e in enfants(rub.code) if not e.ignoree
+                      and not s[e.code].trouvee and not e.cas_echeant and not (e.annuel_seulement and not annuel)]
+        vides = [e.libelle for e in enfants(rub.code) if not e.ignoree
+                 and s[e.code].mode == "titre" and s[e.code].nb_mots == 0 and not e.cas_echeant]
         if vides and statut == CONFORME:
             precision += " Sous-parties non renseignées : " + "; ".join(vides) + "."
             statut = A_VERIFIER
@@ -342,6 +351,11 @@ def _evaluer_forme(res: ResultatAnalyse) -> None:
 
     # Tableaux obligatoires
     for tab in TABLEAUX:
+        if tab.ignoree:
+            lignes.append(LigneForme(tab.code, f"Tableau {tab.numero} : {tab.libelle}", tab.ligne_forme, NON_APPLICABLE,
+                                     "Tableau non exigé par le canevas paramétré."
+                                     + (" (Présent dans le rapport.)" if tab.code in res.tableaux.par_code else "")))
+            continue
         if tab.code in res.tableaux.par_code:
             t = res.tableaux.par_code[tab.code]
             legende = f" (« {t.bloc.legende[:70]} »)" if t.bloc.legende else " (sans titre/numéro)"
@@ -358,25 +372,30 @@ def _evaluer_forme(res: ResultatAnalyse) -> None:
         lignes.append(LigneForme(tab.code, f"Tableau {tab.numero} : {tab.libelle}", tab.ligne_forme, statut, precision))
 
     nb_non_identifies = sum(1 for t in res.tableaux.tableaux if not t.code)
-    tabs = [l for l in lignes if l.code.startswith("T") and l.code[1:].isdigit()]
+    tabs = [l for l in lignes if l.code.startswith("T") and l.code[1:].isdigit() and l.statut != NON_APPLICABLE]
     manquants = [l.libelle.split(" :")[0] for l in tabs if l.statut == NON_CONFORME]
-    lignes.append(LigneForme("tableaux", "Présentation des tableaux et annexes", 64,
+    plan = plan_modele()
+    lignes.append(LigneForme("tableaux", "Présentation des tableaux et annexes", plan.forme.get("tableaux"),
                              NON_CONFORME if manquants else (A_VERIFIER if any(l.statut == A_VERIFIER for l in tabs) else CONFORME),
-                             (f"Tableaux manquants ou vides : {', '.join(manquants)}. " if manquants else "Les 8 tableaux du canevas sont présents. ")
+                             (f"Tableaux manquants ou vides : {', '.join(manquants)}. " if manquants else
+                              f"Les {len(tabs)} tableaux exigés par le canevas sont présents. ")
                              + f"{len(res.tableaux.tableaux)} tableau(x) au total dans le rapport"
                              + (f", dont {nb_non_identifies} hors canevas." if nb_non_identifies else ".")))
 
     statut, precision = res.structure.controle_sommaire()
-    lignes.append(LigneForme("sommaire", "Cohérence entre le sommaire et le contenu", 63, statut, precision))
+    lignes.append(LigneForme("sommaire", "Cohérence entre le sommaire et le contenu", plan.forme.get("sommaire"),
+                             statut, precision))
     sig_statut, sig_precision, _ = res.signature
-    lignes.append(LigneForme("signature", "Le rapport est signé et daté", 74, sig_statut, sig_precision))
+    lignes.append(LigneForme("signature", "Le rapport est signé et daté", plan.forme.get("signature"),
+                             sig_statut, sig_precision))
 
     obligatoires = [l for l in lignes if l.code in PAR_CODE and not PAR_CODE[l.code].cas_echeant
-                    and not PAR_CODE[l.code].hors_grille]
+                    and (not PAR_CODE[l.code].hors_grille or PAR_CODE[l.code].perso) and not PAR_CODE[l.code].ignoree]
     absentes = [l.libelle for l in obligatoires if l.statut == NON_CONFORME]
     a_verifier = [l.libelle for l in obligatoires if l.statut == A_VERIFIER]
     lignes.insert(0, LigneForme(
-        "global_forme", "Présence de toutes les parties et sous-parties obligatoires du rapport", 22,
+        "global_forme", "Présence de toutes les parties et sous-parties obligatoires du rapport",
+        plan.forme.get("global_forme"),
         NON_CONFORME if absentes else (A_VERIFIER if a_verifier else CONFORME),
         (f"{len(absentes)} rubrique(s) obligatoire(s) absente(s) : {'; '.join(absentes)}." if absentes else
          "Toutes les rubriques obligatoires sont présentes.")
@@ -433,6 +452,10 @@ def _evaluer_fond(res: ResultatAnalyse) -> None:
             continue
         det = s[rub.code]
         extrait = f" Extrait : « {det.extrait[:160]} »" if det.trouvee and det.texte else ""
+        if rub.ignoree:
+            lignes.append(LigneFond(rub.code, rub.libelle, rub.ligne_fond, SANS_OBJET, SANS_OBJET,
+                                    "Rubrique non exigée par le canevas paramétré."))
+            continue
         if rub.annuel_seulement and not annuel and not det.trouvee:
             lignes.append(LigneFond(rub.code, rub.libelle, rub.ligne_fond, SANS_OBJET, SANS_OBJET,
                                     "Rubrique propre au rapport annuel."))
@@ -526,7 +549,8 @@ def _evaluer_fond(res: ResultatAnalyse) -> None:
     nb_ko = sum(1 for l in tous if NON_FIABLE in (l.fiabilite,) or INCOHERENT in (l.coherence,))
     nb_abs = sum(1 for l in tous if l.fiabilite == NON_RENSEIGNE)
     lignes.insert(0, LigneFond(
-        "global_fond", "Présence de toutes les parties et sous-parties obligatoires du rapport", 83,
+        "global_fond", "Présence de toutes les parties et sous-parties obligatoires du rapport",
+        plan_modele().fond.get("global_fond"),
         NON_FIABLE if any(l.fiabilite == NON_FIABLE for l in tous) else A_APPRECIER,
         INCOHERENT if any(l.coherence == INCOHERENT for l in tous) else A_APPRECIER,
         f"{nb_ko} rubrique(s) présentant des anomalies de fiabilité ou de cohérence ; {nb_abs} rubrique(s) non renseignée(s)."))

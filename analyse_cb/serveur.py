@@ -29,7 +29,8 @@ from .controles import DEFAUT_DELAIS, jour_mois, lire_date
 from .ressources import dossier_local, dossier_ressources, dossier_utilisateur
 
 EXT_ACCEPTEES = {"rapport": (".docx", ".pdf"), "decret": (".pdf", ".docx", ".txt"),
-                 "situation": (".xlsx", ".xlsm", ".csv", ".pdf", ".docx"), "logo": (".png", ".jpg", ".jpeg", ".gif", ".svg")}
+                 "situation": (".xlsx", ".xlsm", ".csv", ".pdf", ".docx"), "logo": (".png", ".jpg", ".jpeg", ".gif", ".svg"),
+                 "modele": (".xlsx",)}
 INSTITUTION_DEFAUT = {"ligne1": "Ministère des Finances et du Budget", "ligne2": "Côte d'Ivoire"}
 JOURNAL = logging.getLogger("analyse_cb.serveur")
 
@@ -227,6 +228,31 @@ class Application:
                 p.setdefault(section, {})[champ] = v
         enregistrer_preferences(prefs)
         return self.parametres()
+
+    # -- canevas des rapports et modèle du fichier d'analyse (Paramètres)
+    def canevas_modele(self, chemin: str, data: dict) -> dict:
+        from . import canevas, modele
+        with self.verrou:
+            if self.travail and self.travail.get("en_cours"):
+                raise ValueError("Une analyse est en cours : modifiez le canevas ou le modèle une fois qu'elle est terminée.")
+        if chemin == "/api/canevas":
+            return canevas.enregistrer(data)
+        if chemin == "/api/canevas/reinitialiser":
+            return canevas.reinitialiser()
+        if chemin == "/api/modele/importer":
+            f = self.fichiers.get(str(data.get("id") or ""))
+            if not f or f["categorie"] != "modele":
+                raise ValueError("Déposez d'abord le classeur Excel du modèle.")
+            return canevas.importer_modele(f["chemin"], f["nom"])
+        if chemin == "/api/modele/reinitialiser":
+            return canevas.reinitialiser_modele()
+        if chemin == "/api/modele/exporter":
+            dossier = Path(lire_preferences().get("sortie") or dossier_sortie_defaut()) / "Modèles"
+            cible = modele.exporter(dossier)
+            if data.get("ouvrir", True):
+                ouvrir_systeme(cible)
+            return {"chemin": str(cible)}
+        raise ValueError("Action inconnue.")
 
     # -- analyse en arrière-plan
     def lancer(self, demande: dict) -> dict:
@@ -496,6 +522,9 @@ class Gestionnaire(BaseHTTPRequestHandler):
                 return self._json(r)
             if chemin == "/api/travail":
                 return self._json(self.app.travail or {"en_cours": False})
+            if chemin == "/api/canevas":
+                from . import canevas
+                return self._json(canevas.description())
             if chemin == "/api/parametres":
                 return self._json(self.app.parametres())
             if chemin == "/api/logo":
@@ -526,6 +555,8 @@ class Gestionnaire(BaseHTTPRequestHandler):
             if req.path == "/api/ouvrir":
                 self.app.ouvrir(data)
                 return self._json({"ok": True})
+            if req.path.startswith("/api/canevas") or req.path.startswith("/api/modele"):
+                return self._json(self.app.canevas_modele(req.path, data))
             if req.path == "/api/supprimer":
                 historique.supprimer(int(data.get("id", 0)))
                 return self._json({"ok": True})

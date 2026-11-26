@@ -7,6 +7,7 @@ from __future__ import annotations
 import re
 
 from .canevas import PAR_CODE, RUBRIQUES, TABLEAU_PAR_CODE
+from .canevas import reference as reference_canevas
 from .lecture import RE_LEGENDE
 
 CONFORME, NON_CONFORME, A_VERIFIER, NON_APPLICABLE = "Conforme", "Non conforme", "À vérifier", "Non applicable"
@@ -259,7 +260,7 @@ def appreciation_forme(res) -> str:
 
     # Préambule
     p1 = (f"Le rapport du Contrôleur Budgétaire auprès de {_epn(res)} {periode_pour(res)} "
-          f"a été examiné au regard du canevas fixé par la note n°0580/MBPE/DGBF/DCB du 26 juillet 2023. "
+          f"a été examiné au regard du canevas fixé par la {reference_canevas()}. "
           f"Le taux de conformité de la forme est de {res.score_forme:.0f} % ; l'appréciation est {_mention(res, res.score_forme)}.")
     canevas, detail = res.canevas_en_vigueur
     nouvelles_codes = [c for c in ("performance", "risques") if c in lignes and lignes[c].statut == NON_CONFORME
@@ -337,10 +338,11 @@ def appreciation_forme(res) -> str:
         p2 += " Le plan annoncé correspond au contenu du rapport."
 
     # Tableaux
-    codes = sorted(TABLEAU_PAR_CODE)
+    codes = sorted(c for c in TABLEAU_PAR_CODE if not TABLEAU_PAR_CODE[c].ignoree)
     presents = [c for c in codes if c in res.tableaux.par_code]
     tab_absents = [c for c in codes if c not in res.tableaux.par_code]
-    p3 = f"{nombre(len(presents)).capitalize()} des huit (08) tableaux prescrits {_accord(len(presents), 'est produit', 'sont produits')}"
+    p3 = (f"{nombre(len(presents)).capitalize()} des {nombre(len(codes))} tableaux prescrits "
+          f"{_accord(len(presents), 'est produit', 'sont produits')}")
     if tab_absents:
         libs = [f"n°{TABLEAU_PAR_CODE[c].numero} ({TABLEAUX_COURTS[c]})" for c in tab_absents]
         p3 += f" ; {_accord(len(libs), 'le tableau', 'les tableaux')} {enumerer(libs)} {_accord(len(libs), 'manque', 'manquent')}."

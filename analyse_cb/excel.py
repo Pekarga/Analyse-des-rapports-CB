@@ -87,8 +87,25 @@ def _hauteur(texte: str, largeur_car: int = 60, mini: float = 18) -> float:
     return max(mini, min(400, 13 * lignes + 4))
 
 
+def _texte_cellule(ws, cellule: str) -> str:
+    from .texte import normaliser
+    return normaliser(str(ws[cellule].value or ""))
+
+
 def remplir_modele(res: ResultatAnalyse, sortie: str | Path, modele: str | Path | None = None) -> Path:
-    modele = Path(modele) if modele else MODELE_DEFAUT
+    """Remplit le modèle de fichier d'analyse (modèle en vigueur, ou `modele`). Les lignes à remplir sont celles que
+    modele.calculer_plan retrouve d'après les libellés de la colonne A."""
+    from . import canevas, modele as modeles
+    if modele:
+        modele = Path(modele)
+        plan = modeles.calculer_plan(modele, canevas.RUBRIQUES, canevas.TABLEAUX, canevas.alias_dcb(),
+                                     modeles.lignes_forcees() if modele == modeles.modele_courant() else None)
+        if not plan.valide:
+            raise ValueError("Modèle de fichier d'analyse inutilisable : lignes introuvables – " + " ; ".join(plan.manquantes))
+    else:
+        plan = canevas.plan()
+        modele = plan.chemin
+    a = plan.ancres
     wb = load_workbook(modele)
     ws = wb.worksheets[0]
     ws.title = ws.title or "Analyse"
@@ -96,111 +113,137 @@ def remplir_modele(res: ResultatAnalyse, sortie: str | Path, modele: str | Path 
     # ---------------------------------------------------------------- en-tête
     gras = InlineFont(b=True, rFont="Calibri", sz=11)
     normal = InlineFont(rFont="Calibri", sz=11, color="1F4E78")
-    for ligne, libelle, valeur in (
-        (4, "EPN : ", res.infos.epn),
-        (5, "Contrôleur Budgétaire : ", res.infos.controleur or "(non identifié)"),
-        (6, "Période couverte par le présent rapport : ", res.periode.libelle),
-        (7, "Date de réception par la DCB : ",
-         res.infos.date_reception.strftime("%d/%m/%Y") if res.infos.date_reception else "(à renseigner)"),
-        (8, "Chargé d'Etudes : ", res.infos.charge_etudes or "(à renseigner)"),
+    for ancre, valeur in (
+        ("epn", res.infos.epn),
+        ("controleur", res.infos.controleur or "(non identifié)"),
+        ("periode", res.periode.libelle),
+        ("reception", res.infos.date_reception.strftime("%d/%m/%Y") if res.infos.date_reception else "(à renseigner)"),
+        ("charge", res.infos.charge_etudes or "(à renseigner)"),
     ):
-        ws[f"A{ligne}"].value = CellRichText([TextBlock(gras, libelle), TextBlock(normal, str(valeur))])
-    ws["E9"].value = f"→ {res.canevas_en_vigueur[0]}"
-    ws["E9"].font = Font(bold=True, color="1F4E78")
-    ws["E9"].alignment = ENVELOPPE
-    ws["A10"].value = res.canevas_en_vigueur[1]
-    ws["A10"].font = POLICE_AUTO
-    entete = _mention(res)
-    ws["A2"].value = ((entete + " – " if entete else "") + f"Rapport analysé : {res.doc.chemin.name}"
-                      + (" (document scanné)" if res.doc.ocr else "") + f" – analyse du {date.today():%d/%m/%Y}")
-    ws["A2"].font = POLICE_AUTO
+        if ancre not in a:
+            continue
+        cellule = ws[f"A{a[ancre]}"]
+        libelle = str(cellule.value or "")
+        libelle = libelle if libelle.endswith(" ") else libelle.rstrip() + " "
+        cellule.value = CellRichText([TextBlock(gras, libelle), TextBlock(normal, str(valeur))])
+    if "canevas" in a:
+        c = ws[f"E{a['canevas']}"]
+        c.value = f"→ {res.canevas_en_vigueur[0]}"
+        c.font = Font(bold=True, color="1F4E78")
+        c.alignment = ENVELOPPE
+        if a["canevas"] + 1 not in plan.libelles:
+            ws[f"A{a['canevas'] + 1}"].value = res.canevas_en_vigueur[1]
+            ws[f"A{a['canevas'] + 1}"].font = POLICE_AUTO
+    ligne_mention = plan.premiere_vide(1, a.get("epn") or 4)
+    if ligne_mention < (a.get("epn") or 4):
+        entete = _mention(res)
+        ws[f"A{ligne_mention}"].value = ((entete + " – " if entete else "") + f"Rapport analysé : {res.doc.chemin.name}"
+                                         + (" (document scanné)" if res.doc.ocr else "")
+                                         + f" – analyse du {date.today():%d/%m/%Y}")
+        ws[f"A{ligne_mention}"].font = POLICE_AUTO
 
-    # ---------------------------------------------------------------- libellés du modèle corrigés
+    # ---------------------------------------------------------------- libellés du modèle de la DCB corrigés
     # (le modèle de la DCB intitule « forme » l'encadré du fond, nomme « Contrôle de gestion / Contrôle de
-    # trésorerie » les lignes du COGES et du comité de trésorerie, et inverse les numéros des tableaux 1 et 2)
-    for cellule, libelle in (("A55", " - COGES / Organes de supervision (Conseil de gestion)"),
-                             ("A56", " - Comité de trésorerie"),
-                             ("A116", " - COGES / Organes de supervision (Conseil de gestion)"),
-                             ("A117", " - Comité de trésorerie"),
-                             ("A65", " - Tableau 2 : Budgets des trois derniers exercices"),
-                             ("A66", " - Tableau 1 : Budget de l'année comparé à celui de l'année précédente"),
-                             ("A125", "Appréciation générale du fond du rapport : ")):
-        if ws[cellule].value:
-            ws[cellule].value = libelle
+    # trésorerie » les lignes du COGES et du comité de trésorerie, et inverse les numéros des tableaux 1 et 2) ;
+    # un libellé déjà modifié dans un modèle importé est laissé tel quel.
+    for ligne, attendu, libelle in (
+            (plan.forme.get("coges"), "controle de gestion", " - COGES / Organes de supervision (Conseil de gestion)"),
+            (plan.forme.get("comite_tresorerie"), "controle de tresorerie", " - Comité de trésorerie"),
+            (plan.fond.get("coges"), "controle de gestion", " - COGES / Organes de supervision (Conseil de gestion)"),
+            (plan.fond.get("comite_tresorerie"), "controle de tresorerie", " - Comité de trésorerie"),
+            (plan.forme.get("T2"), "tableau 1 : budget des trois derniers exercices",
+             " - Tableau 2 : Budgets des trois derniers exercices"),
+            (plan.forme.get("T1"), "tableau 2 : variation du budget global",
+             " - Tableau 1 : Budget de l'année comparé à celui de l'année précédente"),
+            (a.get("appreciation_fond"), "appreciation generale de la forme", "Appréciation générale du fond du rapport : ")):
+        if ligne and _texte_cellule(ws, f"A{ligne}").strip(" -").startswith(attendu):
+            ws[f"A{ligne}"].value = libelle
 
     # ---------------------------------------------------------------- I. délai
-    ws["A14"].value = res.periode.fin
-    ws["B14"].value = res.date_limite
-    ws["C14"].value = res.infos.date_reception
-    for col in "ABC":
-        ws[f"{col}14"].number_format = "DD/MM/YYYY"
-        ws[f"{col}14"].alignment = CENTRE
-    ws["D14"].value = '=IF(AND(ISNUMBER(B14),ISNUMBER(C14)),C14-B14,"")'
-    ws["D14"].number_format = "0"
-    ws["D14"].alignment = CENTRE
-    ws["E14"].value = ('=IF(D14="","Date de réception non renseignée",IF(D14<=0,"Transmis dans les délais",'
-                       '"Hors délai de "&D14&IF(D14>1," jours"," jour")))')
-    ws["E14"].alignment = ENVELOPPE
-    if not res.validation_directe:
-        ws["A16"].value = ("Date limite calculée selon config/parametres.toml ; l'écart et l'appréciation se recalculent "
-                           "si vous modifiez les dates.")
-        ws["A16"].font = POLICE_AUTO
+    if "delai" in a:
+        d = a["delai"] + 1
+        ws[f"A{d}"].value = res.periode.fin
+        ws[f"B{d}"].value = res.date_limite
+        ws[f"C{d}"].value = res.infos.date_reception
+        for col in "ABC":
+            ws[f"{col}{d}"].number_format = "DD/MM/YYYY"
+            ws[f"{col}{d}"].alignment = CENTRE
+        ws[f"D{d}"].value = f'=IF(AND(ISNUMBER(B{d}),ISNUMBER(C{d})),C{d}-B{d},"")'
+        ws[f"D{d}"].number_format = "0"
+        ws[f"D{d}"].alignment = CENTRE
+        ws[f"E{d}"].value = (f'=IF(D{d}="","Date de réception non renseignée",IF(D{d}<=0,"Transmis dans les délais",'
+                             f'"Hors délai de "&D{d}&IF(D{d}>1," jours"," jour")))')
+        ws[f"E{d}"].alignment = ENVELOPPE
+        if not res.validation_directe and d + 2 not in plan.libelles:
+            ws[f"A{d + 2}"].value = ("Date limite calculée selon les paramètres de l'application ; l'écart et "
+                                     "l'appréciation se recalculent si vous modifiez les dates.")
+            ws[f"A{d + 2}"].font = POLICE_AUTO
 
     # ---------------------------------------------------------------- II. forme
+    lignes_forme = []
     for l in res.forme:
-        if not l.ligne:
+        ligne = plan.forme.get(l.code)
+        if not ligne:
             continue
-        ws[f"C{l.ligne}"].value = l.statut
-        ws[f"C{l.ligne}"].alignment = CENTRE
+        lignes_forme.append(ligne)
+        ws[f"C{ligne}"].value = l.statut
+        ws[f"C{ligne}"].alignment = CENTRE
         texte_e = aerer(l.redige or l.precision, 62)
-        ws[f"E{l.ligne}"].value = texte_e
-        ws[f"E{l.ligne}"].alignment = ENVELOPPE
-        ws[f"E{l.ligne}"].font = Font(name="Calibri", size=9)
-        ws.row_dimensions[l.ligne].height = max(ws.row_dimensions[l.ligne].height or 15,
-                                                _hauteur(texte_e, 70, 22))
+        ws[f"E{ligne}"].value = texte_e
+        ws[f"E{ligne}"].alignment = ENVELOPPE
+        ws[f"E{ligne}"].font = Font(name="Calibri", size=9)
+        ws.row_dimensions[ligne].height = max(ws.row_dimensions[ligne].height or 15, _hauteur(texte_e, 70, 22))
     ws.column_dimensions["E"].width = 55
-    dv_forme = DataValidation(type="list", formula1=f'"{CONFORME},{NON_CONFORME},{A_VERIFIER},{NON_APPLICABLE}"',
-                              allow_blank=True)
-    ws.add_data_validation(dv_forme)
-    dv_forme.add("C22:C74")
-    _mettre_en_forme_statuts(ws, "C22:C74")
+    if lignes_forme:
+        plage = f"C{min(lignes_forme)}:C{max(lignes_forme)}"
+        dv_forme = DataValidation(type="list", formula1=f'"{CONFORME},{NON_CONFORME},{A_VERIFIER},{NON_APPLICABLE}"',
+                                  allow_blank=True)
+        ws.add_data_validation(dv_forme)
+        dv_forme.add(plage)
+        _mettre_en_forme_statuts(ws, plage)
 
     from .redaction import appreciation_forme
     synthese_forme = _prefixe(res) + aerer(appreciation_forme(res))
-    _ecrire_long(ws, 78, synthese_forme.strip())
-    _ajuster_texte(ws, 78, synthese_forme.strip())
+    ligne_af = plan.premiere_vide(a["appreciation_forme"])
+    _ecrire_long(ws, ligne_af, synthese_forme.strip())
+    _ajuster_texte(ws, ligne_af, synthese_forme.strip())
 
     # ---------------------------------------------------------------- III. fond
+    lignes_fond = []
     for l in res.fond:
-        if not l.ligne:
+        ligne = plan.fond.get(l.code)
+        if not ligne:
             continue
+        lignes_fond.append(ligne)
         for col, val in (("C", l.fiabilite), ("D", l.coherence)):
-            ws[f"{col}{l.ligne}"].value = val
-            ws[f"{col}{l.ligne}"].alignment = CENTRE
+            ws[f"{col}{ligne}"].value = val
+            ws[f"{col}{ligne}"].alignment = CENTRE
         texte_e = aerer(l.redige or l.commentaire, 62)
-        ws[f"E{l.ligne}"].value = texte_e
-        ws[f"E{l.ligne}"].alignment = ENVELOPPE
-        ws[f"E{l.ligne}"].font = Font(name="Calibri", size=9)
-        ws.row_dimensions[l.ligne].height = max(ws.row_dimensions[l.ligne].height or 15,
-                                                _hauteur(texte_e, 70, 22))
-    dv_fond_f = DataValidation(type="list", formula1=f'"{FIABLE},{NON_FIABLE},{A_APPRECIER},{NON_RENSEIGNE},{SANS_OBJET}"',
-                               allow_blank=True)
-    dv_fond_c = DataValidation(type="list", formula1=f'"{COHERENT},{INCOHERENT},{A_APPRECIER},{NON_RENSEIGNE},{SANS_OBJET}"',
-                               allow_blank=True)
-    ws.add_data_validation(dv_fond_f)
-    ws.add_data_validation(dv_fond_c)
-    dv_fond_f.add("C83:C123")
-    dv_fond_c.add("D83:D123")
-    _mettre_en_forme_statuts(ws, "C83:D123")
+        ws[f"E{ligne}"].value = texte_e
+        ws[f"E{ligne}"].alignment = ENVELOPPE
+        ws[f"E{ligne}"].font = Font(name="Calibri", size=9)
+        ws.row_dimensions[ligne].height = max(ws.row_dimensions[ligne].height or 15, _hauteur(texte_e, 70, 22))
+    if lignes_fond:
+        haut, bas = min(lignes_fond), max(lignes_fond)
+        dv_fond_f = DataValidation(type="list", formula1=f'"{FIABLE},{NON_FIABLE},{A_APPRECIER},{NON_RENSEIGNE},{SANS_OBJET}"',
+                                   allow_blank=True)
+        dv_fond_c = DataValidation(type="list", formula1=f'"{COHERENT},{INCOHERENT},{A_APPRECIER},{NON_RENSEIGNE},{SANS_OBJET}"',
+                                   allow_blank=True)
+        ws.add_data_validation(dv_fond_f)
+        ws.add_data_validation(dv_fond_c)
+        dv_fond_f.add(f"C{haut}:C{bas}")
+        dv_fond_c.add(f"D{haut}:D{bas}")
+        _mettre_en_forme_statuts(ws, f"C{haut}:D{bas}")
     from .redaction import appreciation_fond
     synthese_fond = _prefixe(res) + aerer(appreciation_fond(res))
-    _ecrire_long(ws, 127, synthese_fond)
-    _ajuster_texte(ws, 127, synthese_fond)
+    ligne_ad = plan.premiere_vide(a["appreciation_fond"])
+    _ecrire_long(ws, ligne_ad, synthese_fond)
+    _ajuster_texte(ws, ligne_ad, synthese_fond)
 
     # ---------------------------------------------------------------- IV. difficultés et suggestions
-    lignes_diff = {"execution": 136, "controle": 138, "gestion": 140}
-    lignes_sugg = {"execution": 149, "controle": 152, "gestion": 155}
-    for cle, depart, nb_lignes, col_appr in (("difficultes", lignes_diff, 2, "D"), ("suggestions", lignes_sugg, 3, "C")):
+    lignes_diff = {cat: a[f"diff_{cat}"] for cat in ("execution", "controle", "gestion") if f"diff_{cat}" in a}
+    lignes_sugg = {cat: a[f"sugg_{cat}"] for cat in ("execution", "controle", "gestion") if f"sugg_{cat}" in a}
+    for cle, depart, col_appr in (("difficultes", lignes_diff, "D"), ("suggestions", lignes_sugg, "C")):
         elements = res.difficultes.get(cle, [])
         for cat, ligne in depart.items():
             items = [e for e in elements if e.categorie == cat]
@@ -220,22 +263,26 @@ def remplir_modele(res: ResultatAnalyse, sortie: str | Path, modele: str | Path 
             ws[f"{col_appr}{ligne}"].value = "Retenue" if res.validation_directe else A_APPRECIER
             ws[f"{col_appr}{ligne}"].alignment = CENTRE
     nd, ns = len(res.difficultes.get("difficultes", [])), len(res.difficultes.get("suggestions", []))
-    _ecrire_long(ws, 145, f"{nd} difficulté(s) extraite(s) du rapport. "
-                 + ("Vérifier le classement par catégorie et apprécier leur pertinence." if nd else
-                    "Aucune difficulté n'a été extraite : vérifier la partie « Difficultés et suggestions »."),
-                 hauteur=30)
-    _ecrire_long(ws, 160, f"{ns} suggestion(s) extraite(s) du rapport. "
-                 + ("Apprécier leur caractère opérationnel et leur lien avec les difficultés." if ns else
-                    "Aucune suggestion n'a été extraite."), hauteur=30)
+    if "appreciation_difficultes" in a:
+        _ecrire_long(ws, plan.premiere_vide(a["appreciation_difficultes"]), f"{nd} difficulté(s) extraite(s) du rapport. "
+                     + ("Vérifier le classement par catégorie et apprécier leur pertinence." if nd else
+                        "Aucune difficulté n'a été extraite : vérifier la partie « Difficultés et suggestions »."),
+                     hauteur=30)
+    if "appreciation_suggestions" in a:
+        _ecrire_long(ws, plan.premiere_vide(a["appreciation_suggestions"]), f"{ns} suggestion(s) extraite(s) du rapport. "
+                     + ("Apprécier leur caractère opérationnel et leur lien avec les difficultés." if ns else
+                        "Aucune suggestion n'a été extraite."), hauteur=30)
 
     # ---------------------------------------------------------------- V. appréciation générale
     from .redaction import appreciation_generale
     projet = _prefixe(res) + aerer(appreciation_generale(res))
-    _ecrire_long(ws, 166, projet, 178)
-    _ajuster_texte(ws, 166, projet, derniere=178)
+    debut_v = plan.premiere_vide(a["appreciation_generale"])
+    fin_v = max(debut_v, a["suite"] - 2)
+    _ecrire_long(ws, debut_v, projet, fin_v)
+    _ajuster_texte(ws, debut_v, projet, derniere=fin_v)
     suite = aerer(suite_a_donner(res))
-    _ecrire_long(ws, 181, suite, 183)
-    ws.print_area = "A1:E184"
+    _ecrire_long(ws, a["suite"] + 1, suite, a["suite"] + 3)
+    ws.print_area = f"A1:E{a['suite'] + 4}"
     ws.sheet_properties.pageSetUpPr.fitToPage = True
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 0

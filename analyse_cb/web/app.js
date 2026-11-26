@@ -1300,12 +1300,21 @@ async function ouvrirRapport(id) {
 }
 
 /* ------------------------------------------------------------------ 6. paramètres */
+const ONGLETS_PARAM = [["general", "Général"], ["canevas", "Canevas des rapports"], ["modele", "Modèle du fichier d'analyse"]];
+function ongletsParamHtml(actif) {
+  return `<div class="onglets onglets-param">${ONGLETS_PARAM.map(([c, l]) => `<button type="button" data-onglet-param="${c}" class="${c === actif ? "actif" : ""}">${l}</button>`).join("")}</div>`;
+}
+function brancherOngletsParam() {
+  document.querySelectorAll("[data-onglet-param]").forEach(b => b.onclick = () => { etat.ongletParam = b.dataset.ongletParam; window.scrollTo(0, 0); pageParametres(); });
+}
 async function pageParametres() {
+  if (etat.ongletParam === "canevas") return pageCanevas();
+  if (etat.ongletParam === "modele") return pageModele();
   const p = await api("/api/parametres");
   if (!etat.app) await majEnvironnement();
   const c = (sec, cle, lib, note = "", type = "text") => `<div class="champ"><label for="${sec}-${cle}">${lib}</label><input id="${sec}-${cle}" data-sec="${sec}" data-cle="${cle}" type="${type}" value="${esc((p[sec] || {})[cle] ?? "")}">${note ? `<span class="note">${note}</span>` : ""}</div>`;
   contenu().innerHTML = entete("Paramètres", "Profil, institution, délais et seuils de l'analyse", `<button class="bouton primaire" id="enregistrer">${icone("coche")}Enregistrer</button>`)
-    + `<div class="grille-2-egal"><div class="pile">
+    + ongletsParamHtml("general") + `<div class="grille-2-egal"><div class="pile">
       <div class="panneau section-param"><h2>${icone("utilisateur")}Profil</h2><div class="ligne-champs">${c("utilisateur", "nom", "Nom et prénoms")}${c("utilisateur", "fonction", "Fonction", "Ex. Chargé d'Études, Analyste budgétaire")}</div></div>
       <div class="panneau section-param"><h2>${icone("accueil")}Institution</h2><div class="ligne-champs">${c("institution", "ligne1", "Ministère / direction")}${c("institution", "ligne2", "Deuxième ligne", "Ex. Côte d'Ivoire")}</div>
         <div style="display:flex;gap:16px;align-items:center;margin-top:14px"><div class="apercu-logo" id="apercu-logo"></div>
@@ -1342,6 +1351,150 @@ async function pageParametres() {
     try { await post("/api/parametres", data); await majEnvironnement(); etat.analyse.charge = undefined; etat.analyse.sortie = undefined; toast("Paramètres enregistrés."); }
     catch (err) { toast(err.message, "erreur"); }
   };
+  brancherOngletsParam();
+}
+
+/* ------------------------------------------------------------------ Paramètres : canevas des rapports */
+function optionsLigneHtml(lignes, choisie, effective) {
+  const auto = choisie == null;
+  return `<option value="auto" ${auto ? "selected" : ""}>Automatique${auto ? (effective ? ` (ligne ${effective})` : " (aucune)") : ""}</option>`
+    + `<option value="0" ${choisie === 0 ? "selected" : ""}>Aucune ligne</option>`
+    + lignes.map(l => `<option value="${l.ligne}" ${choisie === l.ligne ? "selected" : ""}>Ligne ${l.ligne} – ${esc(tronquer(l.libelle, 60))}</option>`).join("");
+}
+async function pageCanevas(donnees) {
+  const cv = donnees || await api("/api/canevas");
+  const b = etat.brouillonCanevas = donnees ? cv : (etat.brouillonCanevas && etat.brouillonCanevas.garder ? etat.brouillonCanevas : JSON.parse(JSON.stringify(cv)));
+  b.garder = false;
+  const exig = (liste, val) => liste.map(e => `<option value="${e.code}" ${e.code === val ? "selected" : ""}>${esc(e.libelle)}</option>`).join("");
+  const lignesModele = cv.modele.lignes;
+  const ligneRub = (r, i) => {
+    const modifie = !r.perso && (r.libelle !== r.libelle_defaut || r.exigence !== r.exigence_defaut || (r.intitules || []).length);
+    return `<tr class="niv-${r.niveau} ${r.perso ? "perso" : ""} ${modifie ? "modifie" : ""} ${r.exigence === "non_exigee" ? "ignoree" : ""}">
+      <td class="texte"><div class="lib-rub"><input data-r="${i}" data-champ="libelle" value="${esc(r.libelle)}" aria-label="Libellé de la rubrique"
+        title="${r.perso ? "Rubrique ajoutée" : "Libellé du canevas : " + esc(r.libelle_defaut)}">${r.perso ? `<span class="pastille-perso">ajoutée</span><button class="retirer" data-supprimer="${i}" title="Supprimer cette rubrique">×</button>` : ""}</div></td>
+      <td><select data-r="${i}" data-champ="exigence" aria-label="Exigence">${exig(cv.exigences, r.exigence)}</select></td>
+      <td class="centre"><input type="checkbox" data-r="${i}" data-champ="titre_requis" ${r.titre_requis ? "checked" : ""} ${r.perso ? "disabled" : ""} aria-label="Titre exigé"></td>
+      <td><input type="number" min="0" class="etroit" data-r="${i}" data-champ="mots_min" value="${r.mots_min}" aria-label="Volume minimal (mots)"></td>
+      <td><input data-r="${i}" data-champ="intitules" value="${esc((r.intitules || []).join(" ; "))}" placeholder="${r.perso ? "Intitulés du rapport, séparés par ;" : "Autres intitulés, séparés par ;"}" aria-label="Intitulés acceptés"></td>
+      <td><select data-r="${i}" data-champ="ligne" aria-label="Ligne du modèle">${optionsLigneHtml(lignesModele, r.ligne_choisie, r.ligne)}</select></td></tr>`;
+  };
+  const ligneTab = (t, i) => `<tr class="${t.libelle !== t.libelle_defaut || t.exigence !== "obligatoire" ? "modifie" : ""} ${t.exigence === "non_exigee" ? "ignoree" : ""}">
+      <td class="centre"><b>${t.numero}</b></td>
+      <td class="texte"><input data-t="${i}" data-champ="libelle" value="${esc(t.libelle)}" title="Libellé du canevas : ${esc(t.libelle_defaut)}" aria-label="Libellé du tableau"></td>
+      <td><select data-t="${i}" data-champ="exigence" aria-label="Exigence">${exig(cv.exigences_tableaux, t.exigence)}</select></td>
+      <td><select data-t="${i}" data-champ="ligne" aria-label="Ligne du modèle">${optionsLigneHtml(lignesModele, t.ligne_choisie, t.ligne)}</select></td></tr>`;
+  const actions = `<button class="bouton danger" id="retablir-canevas">${icone("actualiser")}Rétablir le canevas par défaut</button>
+    <button class="bouton primaire" id="enregistrer-canevas">${icone("coche")}Enregistrer le canevas</button>`;
+  contenu().innerHTML = entete("Paramètres", "Canevas de rédaction des rapports des Contrôleurs Budgétaires", actions) + ongletsParamHtml("canevas")
+    + `<div class="panneau section-param"><h2>${icone("rapports")}Canevas en vigueur</h2>
+      <div class="champ"><label for="reference-canevas">Texte qui institue le canevas</label><input id="reference-canevas" value="${esc(b.reference)}">
+      <span class="note">Cité dans l'appréciation de la forme : « … examiné au regard du canevas fixé par la ${esc(b.reference)} ». Par défaut : ${esc(cv.reference_defaut)}.</span></div>
+      <p class="aide" style="margin:10px 0 0">Les rubriques et les tableaux ci-dessous sont recherchés dans chaque rapport analysé. <b>Exigence</b> : une rubrique « obligatoire » absente est jugée non conforme ; « le cas échéant », elle n'est exigée que si l'EPN est concerné ; « rapport annuel seulement », elle n'est exigée que dans le rapport annuel ; « non exigée », elle n'est pas contrôlée.
+      <b>Intitulés</b> : titres que le CB peut employer pour la rubrique, en plus de ceux que l'application reconnaît déjà (majuscules et accents indifférents). <b>Ligne du modèle</b> : ligne du fichier d'analyse où l'appréciation de la rubrique est reportée.${cv.modifie ? " <b>Le canevas a été modifié</b> : les lignes modifiées sont signalées par un trait bleu." : ""}</p></div>
+    <div class="panneau section-param" style="margin-top:16px"><h2>${icone("couches")}Parties et rubriques</h2>
+      <div class="defilant"><table class="donnees table-canevas"><thead><tr><th>Rubrique</th><th>Exigence</th><th>Titre<br>exigé</th><th>Volume minimal<small>mots</small></th><th>Intitulés acceptés</th><th>Ligne du modèle</th></tr></thead>
+      <tbody>${b.rubriques.map(ligneRub).join("")}</tbody></table></div>
+      <div class="ajout-rubrique"><b>Ajouter une rubrique</b>
+        <input id="nouv-libelle" placeholder="Libellé (ex. Analyse de la performance des programmes)">
+        <select id="nouv-parent"><option value="">Nouvelle partie</option>${b.rubriques.filter(r => r.niveau === 1).map(r => `<option value="${esc(r.code)}">Dans la partie « ${esc(tronquer(r.libelle, 40))} »</option>`).join("")}</select>
+        <select id="nouv-exigence">${exig(cv.exigences, "obligatoire")}</select>
+        <input id="nouv-intitules" placeholder="Autres intitulés, séparés par ;">
+        <button class="bouton" id="ajouter-rubrique">${icone("depot")}Ajouter</button></div></div>
+    <div class="panneau section-param" style="margin-top:16px"><h2>${icone("tableau")}Tableaux obligatoires</h2>
+      <div class="defilant"><table class="donnees table-canevas table-tab"><thead><tr><th>N°</th><th>Libellé</th><th>Exigence</th><th>Ligne du modèle</th></tr></thead>
+      <tbody>${b.tableaux.map(ligneTab).join("")}</tbody></table></div>
+      <p class="aide" style="margin:10px 0 0">Les tableaux sont reconnus d'après leur contenu (colonnes et montants). Leur libellé sert aux textes de l'analyse.</p></div>`;
+  const lire = (el, champ) => champ === "titre_requis" ? el.checked
+    : champ === "ligne" ? (el.value === "auto" ? null : +el.value)
+    : champ === "mots_min" ? (el.value === "" ? 0 : +el.value)
+    : champ === "intitules" ? el.value.split(";").map(x => x.trim()).filter(Boolean) : el.value;
+  document.querySelectorAll("[data-r]").forEach(el => el.onchange = () => {
+    const r = b.rubriques[+el.dataset.r], ch = el.dataset.champ;
+    r[ch === "ligne" ? "ligne_choisie" : ch] = lire(el, ch);
+    if (ch === "exigence") el.closest("tr").classList.toggle("ignoree", el.value === "non_exigee");
+  });
+  document.querySelectorAll("[data-t]").forEach(el => el.onchange = () => {
+    const t = b.tableaux[+el.dataset.t], ch = el.dataset.champ;
+    t[ch === "ligne" ? "ligne_choisie" : ch] = lire(el, ch);
+  });
+  document.getElementById("reference-canevas").onchange = e => { b.reference = e.target.value; };
+  document.querySelectorAll("[data-supprimer]").forEach(x => x.onclick = () => {
+    const code = b.rubriques[+x.dataset.supprimer].code;
+    b.rubriques = b.rubriques.filter(r => r.code !== code && r.parent !== code);
+    b.garder = true;
+    pageCanevas(b);
+  });
+  document.getElementById("ajouter-rubrique").onclick = () => {
+    const libelle = document.getElementById("nouv-libelle").value.trim();
+    if (!libelle) { toast("Saisissez le libellé de la rubrique à ajouter.", "erreur"); return; }
+    const parent = document.getElementById("nouv-parent").value || null;
+    const r = { code: "nouveau_" + Date.now(), libelle, niveau: parent ? 2 : 1, parent, exigence: document.getElementById("nouv-exigence").value,
+      titre_requis: true, mots_min: 10, intitules: document.getElementById("nouv-intitules").value.split(";").map(x => x.trim()).filter(Boolean),
+      perso: true, ligne: null, ligne_choisie: null };
+    // position : après la dernière sous-rubrique de la partie, ou avant la conclusion pour une nouvelle partie
+    let pos = parent ? Math.max(...b.rubriques.map((x, i) => (x.code === parent || x.parent === parent) ? i : -1)) + 1
+      : b.rubriques.findIndex(x => x.code === "conclusion");
+    if (pos < 0) pos = b.rubriques.length;
+    b.rubriques.splice(pos, 0, r);
+    b.garder = true;
+    pageCanevas(b);
+    toast("Rubrique ajoutée : cliquez sur « Enregistrer le canevas » pour la retenir.");
+  };
+  document.getElementById("enregistrer-canevas").onclick = async () => {
+    const data = { reference: b.reference,
+      rubriques: b.rubriques.map(r => ({ code: r.code, libelle: r.libelle, exigence: r.exigence, titre_requis: r.titre_requis, mots_min: r.mots_min,
+        intitules: r.intitules, parent: r.parent, ligne: r.ligne_choisie == null ? "auto" : r.ligne_choisie })),
+      tableaux: b.tableaux.map(t => ({ code: t.code, libelle: t.libelle, exigence: t.exigence, ligne: t.ligne_choisie == null ? "auto" : t.ligne_choisie })) };
+    try { const r = await post("/api/canevas", data); etat.brouillonCanevas = null; await pageCanevas(r); toast("Canevas enregistré : il s'applique aux prochaines analyses."); }
+    catch (err) { toast(err.message, "erreur"); }
+  };
+  document.getElementById("retablir-canevas").onclick = async () => {
+    if (!confirm(`Rétablir le canevas fixé par la ${cv.reference_defaut} ? Les modifications et les rubriques ajoutées seront perdues.`)) return;
+    try { const r = await post("/api/canevas/reinitialiser"); etat.brouillonCanevas = null; await pageCanevas(r); toast("Canevas par défaut rétabli."); }
+    catch (err) { toast(err.message, "erreur"); }
+  };
+  brancherOngletsParam();
+}
+
+/* ------------------------------------------------------------------ Paramètres : modèle du fichier d'analyse */
+async function pageModele(donnees) {
+  const cv = donnees || await api("/api/canevas");
+  const m = cv.modele;
+  const actions = `<button class="bouton" id="exporter-modele">${icone("export")}Exporter le modèle</button>`
+    + (m.personnalise ? `<button class="bouton danger" id="retablir-modele">${icone("actualiser")}Revenir au modèle de la DCB</button>` : "");
+  const ancres = m.ancres.map(x => `<tr><td class="texte">${esc(x.designation)}</td><td class="centre">${x.ligne ? `ligne ${x.ligne}` : '<span class="nc">introuvable</span>'}</td></tr>`).join("");
+  contenu().innerHTML = entete("Paramètres", "Modèle du fichier d'analyse produit pour chaque rapport (document de restitution)", actions) + ongletsParamHtml("modele")
+    + `<div class="grille-2-egal haut"><div class="pile">
+      <div class="panneau section-param"><h2>${icone("fichier")}Modèle en vigueur</h2>
+        <p style="margin:0 0 6px"><b>${esc(m.nom)}</b>${m.personnalise ? ` ${statutHtml("personnalisé", "bleu")}` : ` ${statutHtml("par défaut", "gris")}`}</p>
+        ${m.importe_le ? `<p class="aide" style="margin:0 0 6px">Importé le ${dateFr(m.importe_le)} à ${m.importe_le.slice(11, 16)}.</p>` : ""}
+        <p class="aide" style="margin:0">${m.manquantes.length ? `<span class="taux-ko">Lignes indispensables introuvables : ${esc(m.manquantes.join(" ; "))}. Le modèle de la DCB est utilisé à la place.</span>`
+          : "Toutes les lignes indispensables du modèle sont repérées."}
+          ${m.sans_ligne.length ? `<br>Sans ligne dans ce modèle (analysées et reportées dans l'onglet « Contrôle structure » du fichier) : ${esc(m.sans_ligne.join(" ; "))}.` : ""}</p></div>
+      <div class="panneau section-param"><h2>${icone("depot")}Remplacer le modèle</h2>
+        <ol class="etapes">
+          <li><b>Exportez le modèle</b> (bouton en haut de la page) : une copie s'ouvre dans Excel, rangée dans le dossier « Modèles » du dossier des résultats.</li>
+          <li><b>Modifiez-le dans Excel</b> : mise en forme, logo, en-tête, libellés, nouvelles lignes de rubriques dans les parties II et III (même libellé dans les deux parties). Gardez la grille dans la première feuille et les intitulés de la colonne A qui repèrent les parties (« II. ANALYSE DE LA FORME DU RAPPORT », « Présence de toutes les parties… », « Appréciation générale… », « Suite à donner »…).</li>
+          <li><b>Importez le modèle modifié</b> ci-dessous, puis vérifiez dans l'onglet « Canevas des rapports » la ligne retenue pour chaque rubrique.</li></ol>
+        <div class="depot petit" id="depot-modele" tabindex="0" role="button">${icone("depot")}<div class="titre">Importer un modèle (.xlsx)</div><div class="aide" style="margin:0">Cliquez ou déposez le classeur ici</div></div></div>
+    </div><div class="panneau section-param"><h2>${icone("tableau")}Lignes repérées dans le modèle</h2>
+      <div class="defilant"><table class="donnees"><thead><tr><th>Élément du fichier d'analyse</th><th>Ligne</th></tr></thead><tbody>${ancres}</tbody></table></div>
+      <p class="aide" style="margin:10px 0 0">Les lignes sont retrouvées d'après les intitulés de la colonne A : un modèle dont des lignes ont été ajoutées ou déplacées reste utilisable.</p></div></div>`;
+  brancherDepot("depot-modele", "modele", [".xlsx"], async f => {
+    try { const r = await post("/api/modele/importer", { id: f.id }); await pageModele(r); toast(`Modèle « ${f.nom} » adopté : il s'applique aux prochaines analyses.`); }
+    catch (err) { toast(err.message, "erreur"); }
+  });
+  document.getElementById("exporter-modele").onclick = async () => {
+    try { const r = await post("/api/modele/exporter", {}); toast("Modèle exporté : " + r.chemin); }
+    catch (err) { toast(err.message, "erreur"); }
+  };
+  const retablir = document.getElementById("retablir-modele");
+  if (retablir) retablir.onclick = async () => {
+    if (!confirm("Revenir au modèle de la DCB fourni avec l'application ?")) return;
+    try { const r = await post("/api/modele/reinitialiser"); await pageModele(r); toast("Modèle de la DCB rétabli."); }
+    catch (err) { toast(err.message, "erreur"); }
+  };
+  brancherOngletsParam();
 }
 
 /* ------------------------------------------------------------------ 7. aide, 8. à propos */
@@ -1359,6 +1512,7 @@ function pageAide() {
       <p><b>D'où viennent les montants du tableau de bord ?</b><br>De la situation d'exécution (SIGOBE) lorsqu'elle est fournie, sinon des tableaux du rapport. La source est indiquée sous le détail par EPN.</p>
       <p><b>Quelles sont les dates limites de transmission ?</b><br>${esc(resumeDelais())} Un rapport reçu après sa date limite est signalé « hors délai » (alerte, appréciation générale, fichier d'analyse). Ces dates se modifient dans les Paramètres.</p>
       <p><b>Comment est fixé le statut d'exécution ?</b><br>Le taux d'exécution est comparé au taux attendu en fin de période (25 %, 50 %, 75 %, 100 %). Les seuils se règlent dans les Paramètres.</p>
+      <p><b>Le canevas ou la grille d'analyse de la DCB a changé.</b><br>Dans Paramètres, onglet « Canevas des rapports », adaptez les rubriques (libellé, exigence, intitulés) ou ajoutez-en ; onglet « Modèle du fichier d'analyse », exportez le modèle, modifiez-le dans Excel puis importez-le.</p>
       <p><b>Un document scanné n'est pas lu.</b><br>Vérifiez dans Paramètres que la lecture des documents scannés est disponible. À défaut, demandez la version Word du rapport.</p>
       <p><b>Où sont conservées les données ?</b><br>Uniquement sur ce poste : les fichiers d'analyse dans le dossier des résultats, l'historique dans le profil de l'utilisateur. Aucune donnée n'est envoyée sur Internet.</p>
       <p><b>L'interface ne s'affiche pas.</b><br>Si Microsoft Edge ne l'affiche pas, l'application l'ouvre d'elle-même dans le navigateur par défaut au bout de 45 secondes. Vous pouvez aussi utiliser le raccourci « Analyse des rapports des CB (dans le navigateur) » du menu Démarrer. Le déroulement est consigné dans le journal (Paramètres, Fichiers).</p></div></div>`;
