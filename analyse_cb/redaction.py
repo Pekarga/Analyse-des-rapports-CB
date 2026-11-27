@@ -281,9 +281,17 @@ def appreciation_forme(res) -> str:
     presentes = [PARTIES[c] for c in PARTIES if c in lignes and lignes[c].statut in (CONFORME, A_VERIFIER)]
     absentes = [PARTIES[c] for c in PARTIES if c in lignes and lignes[c].statut == NON_CONFORME
                 and not s[c].trouvee and c not in nouvelles_codes]
-    p2 = f"Le rapport comprend {enumerer(presentes)}." if presentes else ""
+    # Parties ajoutées au canevas dans les Paramètres
+    absentes += [r.libelle.lower() if not r.libelle.isupper() else r.libelle.capitalize() for r in RUBRIQUES
+                 if r.perso and r.niveau == 1 and not r.ignoree and not r.cas_echeant and r.code in lignes
+                 and lignes[r.code].statut == NON_CONFORME and not s[r.code].trouvee]
     if absentes:
-        p2 += f" {enumerer(absentes)[:1].upper()}{enumerer(absentes)[1:]} {_accord(len(absentes), 'manque', 'manquent')}."
+        p2 = (f"Le rapport ne comprend pas toutes les parties recommandées par le canevas des rapports prescrits : "
+              f"{enumerer(absentes)} {_accord(len(absentes), 'manque', 'manquent')}.")
+    elif nouvelles_codes:
+        p2 = "Les autres parties recommandées par le canevas des rapports prescrits figurent dans le rapport."
+    else:
+        p2 = "Le rapport comprend toutes les parties recommandées par le canevas des rapports prescrits." if presentes else ""
     manquantes: dict[str, list[str]] = {}
     vides, peu = [], []
     for rub in RUBRIQUES:
