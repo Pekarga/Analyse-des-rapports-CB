@@ -650,8 +650,9 @@ def extraire_difficultes_suggestions(doc: DocumentRapport, s: AnalyseStructure) 
     titres = {d.debut for d in s.detections.values() if d.mode == "titre"}
     for code in ("difficultes", "suggestions"):
         det = s[code]
-        source = det if det.trouvee else s["difficultes_suggestions"]
-        commune = not det.trouvee and source.trouvee  # partie sans sous-titres « Difficultés » / « Suggestions »
+        propre = det.trouvee and not det.via_parent  # sous-partie avec son propre titre
+        source = det if propre else s["difficultes_suggestions"]
+        commune = not propre and source.trouvee  # partie sans sous-titres « Difficultés » / « Suggestions »
         if commune and code == "suggestions":
             continue  # déjà répartie lors du passage « difficultes »
         for texte, page in _items(doc, source, titres):

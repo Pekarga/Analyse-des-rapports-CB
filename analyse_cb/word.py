@@ -147,8 +147,17 @@ def _paragraphes(doc, texte: str, gras: bool = False, taille: float = 10, avant:
         p.paragraph_format.space_after = Pt(4)
         if avant and not i:
             p.paragraph_format.space_before = Pt(avant)
+        intitule = bloc.endswith(":") and len(bloc) < 60  # « Points de satisfaction : », « Insuffisances : »
+        if intitule:
+            p.paragraph_format.space_before = Pt(6)
+            p.paragraph_format.space_after = Pt(2)
+            p.paragraph_format.keep_with_next = True
+        elif bloc.startswith("•"):
+            p.paragraph_format.left_indent = Cm(0.6)
+            p.paragraph_format.first_line_indent = Cm(-0.4)
+            p.paragraph_format.space_after = Pt(2)
         r = p.add_run(bloc)
-        r.bold = gras
+        r.bold = gras or intitule
         r.font.size = Pt(taille)
 
 

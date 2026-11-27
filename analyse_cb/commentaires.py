@@ -67,7 +67,11 @@ def aerer(texte: str, car_par_ligne: int = 175, lignes: int = 3) -> str:
                 courant = f"{courant} {ph}".strip()
         if courant:
             blocs.append(courant)
-    return "\n\n".join(blocs)
+    out = ""
+    for i, b in enumerate(blocs):
+        groupe = i and (b.startswith("•") and (blocs[i - 1].startswith("•") or blocs[i - 1].endswith(":")))
+        out += ("\n" if groupe else "\n\n" if i else "") + b
+    return out
 
 
 def _titre(det) -> str:
@@ -258,6 +262,8 @@ def commentaire_forme(l, res) -> str:
         t = "Absente du rapport."
     elif det.mode == "titre":
         t = f"Présente sous le titre « {_titre(det)} »."
+    elif det.mode == "texte" and getattr(det, "via_parent", ""):
+        t = f"Traitée sous le titre de la partie « {_sans_numero(det.via_parent).strip(' :-–').replace('’', chr(39))} »."
     elif det.mode == "texte":
         t = "Traitée dans le texte, sans titre propre."
     else:

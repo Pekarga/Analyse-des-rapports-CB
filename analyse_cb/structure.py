@@ -12,6 +12,12 @@ from .texte import extrait, nb_mots, normaliser
 RE_NUMEROTATION = re.compile(r"^\s*(([IVXLivxl1]{1,5}|\d{1,2}|[A-H])(\.\d[\d.]*\s*[-.)]?\s*|[.\-)]\s*)|[-•●▪➢•*]\s*)+")
 
 
+# Parties dont le titre peut nommer une sous-partie traitée dans son texte, sans sous-titre propre.
+VIA_PARENT = {"dispositifs_controle": ("controle_interne", "controle_gestion"),
+              "difficultes_suggestions": ("difficultes", "suggestions"),
+              "gouvernance": ("coges", "comite_tresorerie")}
+
+
 @dataclass
 class Detection:
     rubrique: Rubrique
@@ -22,6 +28,7 @@ class Detection:
     texte: str = ""
     nb_mots: int = 0
     paragraphes: list[int] = field(default_factory=list)
+    via_parent: str = ""  # sous-partie traitée sous le titre de sa partie (titre de la partie)
 
     @property
     def trouvee(self) -> bool:
@@ -114,6 +121,23 @@ class AnalyseStructure:
                     self._calculer_fins(filles, parent.debut, parent.fin)
                 else:
                     self._calculer_fins(filles, 0, n)
+
+        # 2 bis) Sous-partie nommée dans le titre de sa partie (« Évaluation du dispositif de contrôle interne
+        #    budgétaire », « Difficultés rencontrées et suggestions ») : traitée dans le texte de la partie.
+        for parent_code, filles in VIA_PARENT.items():
+            parent = self.detections.get(parent_code)
+            if not parent or parent.mode != "titre":
+                continue
+            titre = normaliser(_sans_numero(parent.titre))
+            sous_titres = [d.debut for d in self.detections.values() if d.mode == "titre" and d.rubrique.parent == parent_code]
+            fin_corps = min(sous_titres) if sous_titres else parent.fin
+            corps = [b.index for b in self.doc.blocs[parent.debut + 1:fin_corps] if b.type == "p" and not b.sommaire]
+            for code in filles:
+                det = self.detections.get(code)
+                if det is None or det.trouvee or not corps:
+                    continue
+                if any(re.search(m, titre) for m in det.rubrique.titres):
+                    det.mode, det.debut, det.paragraphes, det.via_parent = "texte", corps[0], corps, parent.titre.strip()
 
         # 3) Texte et volume de chaque rubrique (les titres des sous-parties ne comptent pas comme contenu :
         #    une partie dont toutes les sous-parties sont vides est elle-même vide)

@@ -1239,3 +1239,80 @@ def test_doc_sans_convertisseur(tmp_path, monkeypatch):
     (tmp_path / "ancien.doc").write_bytes(b"\xd0\xcf\x11\xe0 document")
     with pytest.raises(ValueError, match="Enregistrer sous"):
         bureautique.doc_vers_docx(tmp_path / "ancien.doc")
+
+
+def test_sessions_des_organes():
+    from analyse_cb.thematiques import _sessions
+    assert _sessions("A la date du 30 septembre 2026, aucun conseil ne s'est tenu.") == 0
+    assert _sessions("Au cours du trimestre, un seul comité de trésorerie a pu se tenir.") == 1
+    assert _sessions("Le Conseil de gestion s'est réuni à deux (02) reprises au cours du semestre.") == 2
+    assert _sessions("Le COGES a tenu trois sessions ordinaires.") == 3
+    assert _sessions("Le conseil s'est tenu le 12 mars 2026 puis le 15 juin 2026.") == 2
+    assert _sessions("Le comité de trésorerie a pour mission de suivre la trésorerie.") is None
+
+
+def generer_rapport_gouvernance(dossier: Path) -> Path:
+    """Rapport fictif au plan proche des rapports réels : titres « Évaluation du dispositif de contrôle interne
+    budgétaire » et « Difficultés rencontrées et suggestions », biens énumérés, organes de gouvernance."""
+    from docx import Document
+    d = Document()
+    for titre, textes in [
+        ("INTRODUCTION", ["L'Établissement d'exemple a été créé par le décret n°2099-001 du 01/01/2099 et a pour missions "
+                          "la formation des agents de l'État."]),
+        ("I. PRESENTATION DU BUDGET", ["Le budget de l'exercice s'élève à 500 000 000 FCFA en recettes et en dépenses."]),
+        ("V. EVALUATION DU DISPOSITIF DE CONTROLE INTERNE BUDGETAIRE",
+         ["La question relative au dispositif de contrôle interne reste entière. En effet, la plupart des textes qui "
+          "encadrent les activités de l'établissement ne sont pas encore disponibles.",
+          "Il apparaît important que l'ordonnateur multiplie les initiatives à cet effet."]),
+        ("VI. SITUATION DU PATRIMOINE", ["Au niveau du patrimoine, la situation existante est celle des véhicules. "
+                                         "L'établissement a acquis au cours de la gestion précédente trois véhicules. Il s'agit :",
+                                         "1 TOYOTA HILUX", "2 SUZUKI VITARA",
+                                         "Des acquisitions de mobilier ont été faites cette année sans point détaillé."]),
+        ("VII. SITUATION DE LA GOUVERNANCE DE L'EPN", []),
+        ("COMITE DE TRESORERIE", ["Au cours du trimestre, un seul comité de trésorerie a pu se tenir. Il a eu lieu le 18 juin 2099."]),
+        ("CONSEIL DE GESTION", ["A la date du 30 septembre 2099, aucun conseil ne s'est tenu. Toutefois, l'arrêté devant "
+                                "entériner la désignation des membres pour la mise en place du conseil n'est pas encore pris."]),
+        ("X. DIFFICULTES RENCONTREES ET SUGGESTIONS", ["La principale difficulté de l'établissement demeure le problème de "
+                                                       "connexion au réseau de télécommunication."]),
+        ("CONCLUSION", ["Le Contrôleur Budgétaire reste attentif à la bonne exécution du budget."])]:
+        d.add_paragraph(titre).runs[0].bold = True
+        for t in textes:
+            d.add_paragraph(t)
+    chemin = dossier / "rapport_gouvernance.docx"
+    d.save(chemin)
+    return chemin
+
+
+def test_gouvernance_patrimoine_controle_difficultes(tmp_path, monkeypatch):
+    """Points de gouvernance (COGES/COS, comité de trésorerie), de patrimoine, de contrôle et de difficultés, et
+    appréciation générale en points de satisfaction et insuffisances."""
+    _profil_temporaire(monkeypatch, tmp_path)
+    from analyse_cb.redaction import appreciation_generale
+    res = analyser(generer_rapport_gouvernance(tmp_path), InfosRapport(periode="3e trimestre 2099"))
+    s, forme = res.structure, {l.code: l for l in res.forme}
+    fond = {l.code: l.redige for l in res.fond}
+    # Sous-partie nommée dans le titre de sa partie : traitée, pas « absente »
+    assert s["controle_interne"].via_parent.startswith("V. EVALUATION") and forme["controle_interne"].statut == "Conforme"
+    assert "Traitée sous le titre de la partie" in forme["controle_interne"].redige
+    assert not s["controle_gestion"].trouvee and "n'est pas traité" in fond["controle_gestion"]
+    assert s["difficultes"].trouvee and not s["suggestions"].trouvee  # aucune suggestion formulée
+    r = res.thematiques
+    assert (r.coges.sessions, r.ct.sessions) == (0, 1) and r.ct.hors_periode
+    assert "aucune session tenue" in fond["coges"] and "arrêté" in fond["coges"]
+    assert "18/06/2099" in fond["comite_tresorerie"] and "hors de la période" in fond["comite_tresorerie"]
+    assert r.biens == [(1, "Toyota Hilux"), (2, "Suzuki Vitara")] and "trois (03) véhicules" in fond["patrimoine_existant"]
+    assert "mobilier" in fond["acquisitions"] and "ne sont pas détaillés" in fond["acquisitions"]
+    assert "comptabilité des matières n'est pas traité" in fond["compta_matieres"]
+    assert "contrôle interne reste entière" in fond["controle_interne"]
+    assert "liées à la gestion de l'établissement : 1" in fond["difficultes"]
+    t = appreciation_generale(res)
+    sat = t[t.index("Points de satisfaction :"):t.index("Insuffisances :")]
+    ins = t[t.index("Insuffisances :"):]
+    assert "• Le patrimoine existant est présenté (trois (03) véhicules)." in sat
+    assert "dispositif de contrôle interne budgétaire est évalué" in sat and "gestion de l'établissement sont exposées" in sat
+    assert "Aucune session du Conseil de gestion (COGES / COS) ne s'est tenue au cours de la période, sa mise en place " \
+           "attendant l'arrêté de désignation de ses membres" in ins
+    assert "session du comité de trésorerie présentée comme tenue au cours de la période est datée du 18/06/2099" in ins
+    assert "comptabilité des matières n'est pas traitée" in ins and "Le contrôle de gestion n'est pas traité" in ins
+    assert "Aucune difficulté liée à l'exécution du budget ni au contrôle de l'exécution du budget n'est formulée" in ins
+    assert "Aucune suggestion n'est formulée" in ins

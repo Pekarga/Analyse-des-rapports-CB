@@ -594,16 +594,16 @@ def appreciation_generale(res) -> str:
         forts.append("ne comporte pas d'erreur de calcul")
     if lignes.get("signature") and lignes["signature"].statut == CONFORME:
         forts.append("est daté et signé")
-    if forts:
-        # « Le rapport présente… et une partie de ses données… concorde » : sujets différents, deux propositions
-        verbes = [f for f in forts if not f.startswith(("toutes", "une partie"))]
-        donnees = [f for f in forts if f.startswith(("toutes", "une partie"))]
-        p2 = (f"Le rapport {enumerer(verbes)}" if verbes else "")
-        if donnees:
-            p2 += (", et " if p2 else "") + donnees[0][:1].upper() * (not p2) + (donnees[0][1:] if not p2 else donnees[0])
-        p2 += "."
-    else:
-        p2 = "L'examen ne fait ressortir aucun point positif particulier."
+    # Points tirés de la gouvernance, du patrimoine, du dispositif de contrôle et des difficultés et suggestions
+    from .thematiques import points_appreciation
+    them = getattr(res, "thematiques", None)
+    t_sat, t_ins, t_recos = points_appreciation(res, them) if them is not None else ([], [], [])
+    verbes = [f for f in forts if not f.startswith(("toutes", "une partie", "dont"))]
+    donnees = [f for f in forts if f.startswith(("toutes", "une partie", "dont"))]
+    satisfactions = ([f"Le rapport {f}." for f in verbes] + [d[:1].upper() + d[1:] + "." for d in donnees]
+                     + [x[:1].upper() + x[1:] + "." for x in t_sat])
+    p2 = ("Points de satisfaction :\n" + "\n".join(f"• {x}" for x in satisfactions) if satisfactions
+          else "Points de satisfaction : l'examen ne fait ressortir aucun point positif particulier.")
 
     faibles = []
     nb_tab = sum(1 for c in TABLEAU_PAR_CODE if c not in res.tableaux.par_code)
@@ -629,7 +629,8 @@ def appreciation_generale(res) -> str:
         autres = [p for p in ec if p is not ref and p.theme != "Mode de financement"]
         if autres:
             faibles.append(enumerer([_ecart_decret(p) for p in autres]))
-        if any(p.rubrique == "coges" and "aucune session" in p.constat for p in res.confrontation.points):
+        if any(p.rubrique == "coges" and "aucune session" in p.constat for p in res.confrontation.points) and \
+                not any("Conseil de gestion" in x for x in t_ins):
             faibles.append("le rapport constate qu'aucune session du Conseil de gestion ne s'est tenue, sans en tirer "
                            "les conséquences pour la gouvernance de l'établissement")
     rap = res.rapprochement
@@ -646,13 +647,9 @@ def appreciation_generale(res) -> str:
             faibles.append("la régulation budgétaire n'est pas répercutée sur les dépenses")
     if lignes.get("signature") and lignes["signature"].statut == NON_CONFORME:
         faibles.append("le rapport n'est ni daté ni signé")
-    if faibles:
-        phrases = [f[:1].upper() + f[1:] + "." for f in faibles]
-        if len(phrases) > 1:
-            phrases[-1] = "Enfin, " + phrases[-1][:1].lower() + phrases[-1][1:]
-        p3 = "Ses insuffisances sont toutefois importantes. " + " ".join(phrases) if forts else " ".join(phrases)
-    else:
-        p3 = "Aucune insuffisance majeure n'a été relevée."
+    insuffisances = [f[:1].upper() + f[1:] + "." for f in faibles + t_ins]
+    p3 = ("Insuffisances :\n" + "\n".join(f"• {x}" for x in insuffisances) if insuffisances
+          else "Insuffisances : aucune insuffisance majeure n'a été relevée.")
 
     recos = []
     if nb_rub or nb_tab:
@@ -668,6 +665,7 @@ def appreciation_generale(res) -> str:
         recos.append("mettre à jour les mentions de période reprises d'anciens rapports")
     if lignes.get("signature") and lignes["signature"].statut == NON_CONFORME:
         recos.append("dater et signer son rapport")
+    recos += [r for r in t_recos if r not in recos]
     if e is not None and e > 0:
         recos.append("respecter le délai de transmission")
     p4 = _recommander(recos)

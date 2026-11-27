@@ -20,7 +20,7 @@ a = Analysis(
     binaries=binaries,
     datas=datas,
     hiddenimports=["analyse_cb.interface", "analyse_cb.__main__", "analyse_cb.serveur", "analyse_cb.historique",
-                   "analyse_cb.tableau", "analyse_cb.ratios", "analyse_cb.natures", "analyse_cb.modele", "analyse_cb.canevas_document", "analyse_cb.word", "analyse_cb.bureautique", "pytesseract", "cv2", "numpy", "numpy.core.multiarray"]
+                   "analyse_cb.tableau", "analyse_cb.ratios", "analyse_cb.natures", "analyse_cb.modele", "analyse_cb.canevas_document", "analyse_cb.word", "analyse_cb.bureautique", "analyse_cb.thematiques", "pytesseract", "cv2", "numpy", "numpy.core.multiarray"]
                   + collect_submodules("numpy.core") + collect_submodules("numpy._core"),
     excludes=["streamlit", "pandas", "matplotlib", "IPython", "pytest", "webview", "clr", "pythonnet"],
     noarchive=False,

@@ -84,6 +84,7 @@ class ResultatAnalyse:
     fond: list[LigneFond] = field(default_factory=list)
     signature: tuple[str, str, date | None] = ("", "", None)
     canevas_en_vigueur: tuple[str, str] = ("", "")
+    thematiques: object = None  # thematiques.Rubriques : gouvernance, patrimoine, contrôle, difficultés
     difficultes: dict[str, list[Element]] = field(default_factory=dict)
     parametres: dict = field(default_factory=dict)
     decret: Decret | None = None
@@ -271,6 +272,10 @@ def analyser(chemin: str | Path, infos: InfosRapport | None = None, parametres: 
     annexes = structure["annexes"]
     res.signature = controle_signature(doc, annexes.debut if annexes.trouvee else None)
     res.difficultes = extraire_difficultes_suggestions(doc, structure)
+    for code in ("difficultes", "suggestions"):  # nommées dans le titre de la partie, mais sans élément formulé
+        det = structure.detections.get(code)
+        if det is not None and det.via_parent and not res.difficultes.get(code):
+            det.mode, det.debut, det.paragraphes, det.via_parent, det.texte, det.nb_mots = None, None, [], "", "", 0
     _evaluer_canevas(res)
     _evaluer_forme(res)
     _evaluer_fond(res)
@@ -328,6 +333,9 @@ def _evaluer_forme(res: ResultatAnalyse) -> None:
                 precision += f" Rubrique peu développée ({det.nb_mots} mots)."
             if rub.annuel_seulement and not annuel:
                 precision += " (Rubrique facultative hors rapport annuel.)"
+        elif det.mode == "texte" and det.via_parent:
+            statut = CONFORME
+            precision = f"Traitée sous le titre de la partie « {det.via_parent[:90]} »."
         elif det.mode == "texte":
             statut = CONFORME if not rub.titre_requis else A_VERIFIER
             precision = ("Élément traité dans le texte" + ("" if not rub.titre_requis else " sans titre dédié")
@@ -562,8 +570,27 @@ def _rediger(res: ResultatAnalyse) -> None:
     from .commentaires import commentaire_fond, commentaire_forme
     for l in res.forme:
         l.redige = commentaire_forme(l, res)
+    from .thematiques import analyser_rubriques, commentaire_fond as synthese
+    try:
+        rubs = analyser_rubriques(res)
+    except Exception:  # la synthèse ne doit jamais empêcher l'analyse
+        rubs = None
     for l in res.fond:
         l.redige = commentaire_fond(l, res)
+        t = synthese(l.code, res, rubs) if rubs is not None and l.fiabilite != SANS_OBJET else None
+        if t:
+            l.redige = _fusionner(t, l.redige)
+    res.thematiques = rubs
+
+
+def _fusionner(synthese: str, commentaire: str) -> str:
+    """Synthèse de ce que dit le rapport, suivie des constats de contrôle (sans les citations ni les mentions
+    d'absence déjà couvertes par la synthèse)."""
+    restes = [ph for ph in re.split(r"(?<=[.»])\s+(?=[A-ZÀ-Ý])", commentaire or "")
+              if ph.strip() and not re.search(r"Le CB y indique|Rubrique absente|Sous-rubriques? absentes?|aucune session du "
+                                              r"Conseil de gestion|Aucune session du Conseil de gestion|le contenu ne peut",
+                                              ph)]
+    return " ".join([synthese] + restes)
 
 
 def _valider(res: ResultatAnalyse) -> None:
